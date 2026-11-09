@@ -27,24 +27,19 @@ else()
   message(FATAL_ERROR "zwasm supports Android, Windows and Web only")
 endif()
 
-file(GLOB_RECURSE ZWASM_SOURCES
-  "${ZWASM_SRC}/src/*.zig"
-  "${ZWASM_SRC}/build.zig"
-  "${ZWASM_SRC}/build.zig.zon"
-)
-
-add_custom_command(
-  OUTPUT "${ZWASM_ARCHIVE}"
+# Run Zig every build. Zig's own cache makes this a no-op when the submodule
+# is unchanged, and an always-run target avoids a stale source glob when the
+# submodule moves to a different commit.
+add_custom_target(zwasm_native ALL
   COMMAND "${ZIG_EXECUTABLE}" build plugin-lib
           -Doptimize=ReleaseSafe
           "-Dtarget=${ZIG_TARGET}"
           --prefix "${ZIG_PREFIX}"
   WORKING_DIRECTORY "${ZWASM_SRC}"
-  DEPENDS ${ZWASM_SOURCES}
+  BYPRODUCTS "${ZWASM_ARCHIVE}"
   COMMENT "Building zwasm static library (${ZIG_TARGET})"
   VERBATIM
 )
-add_custom_target(zwasm_native DEPENDS "${ZWASM_ARCHIVE}")
 
 add_library(zwasm SHARED "zwasm.c")
 if(WIN32)
