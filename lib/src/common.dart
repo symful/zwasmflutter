@@ -121,6 +121,40 @@ class ZwasmExport {
   const ZwasmExport(this.name, this.kind);
 }
 
+/// A module import descriptor.
+class ZwasmImportInfo {
+  final String module;
+  final String name;
+  final ZwasmExternKind kind;
+
+  const ZwasmImportInfo(this.module, this.name, this.kind);
+
+  @override
+  String toString() => '$module.$name ($kind)';
+}
+
+/// Dart implementation of one host import.
+typedef ZwasmHostFunction = List<ZwasmValue> Function(List<ZwasmValue> args);
+
+/// Registers a Dart function as a host import. The signature must match the
+/// importing module's declared type exactly; [function] receives one value per
+/// parameter and must return one value per result.
+class ZwasmHostImport {
+  final String module;
+  final String name;
+  final List<ZwasmValueKind> params;
+  final List<ZwasmValueKind> results;
+  final ZwasmHostFunction function;
+
+  const ZwasmHostImport({
+    required this.module,
+    required this.name,
+    required this.params,
+    required this.results,
+    required this.function,
+  });
+}
+
 /// Backend contract implemented by the FFI (native) and JS-interop (web)
 /// layers. Handles are opaque integers allocated by the runtime.
 abstract class ZwasmBackend {
@@ -139,14 +173,23 @@ abstract class ZwasmBackend {
   String moduleExportName(int module, int index);
   int moduleExportKind(int module, int index);
 
+  int moduleImportCount(int module);
+  String moduleImportModule(int module, int index);
+  String moduleImportName(int module, int index);
+  int moduleImportKind(int module, int index);
+
   int wasiConfigNew();
   void wasiConfigDelete(int config);
   void wasiAddArg(int config, String arg);
   void wasiAddEnv(int config, String key, String value);
   void wasiInheritStdio(int config);
+  void wasiPreopenDir(int config, String hostPath, String guestPath);
+  void wasiAddFile(
+      int config, String guestPath, Uint8List data, bool writable);
+  void wasiAddDir(int config, String guestPath, bool writable);
 
   int instanceNew(int module, ZwasmEngineKind engine, int? fuel,
-      int? maxMemoryPages, int? wasiConfig);
+      int? maxMemoryPages, int? wasiConfig, List<ZwasmHostImport> imports);
   void instanceDelete(int instance);
 
   ZwasmSignature funcSig(int instance, String name);
@@ -167,6 +210,7 @@ abstract class ZwasmBackend {
   int memoryData(int instance);
   int memoryGrow(int instance, int delta);
   Uint8List memoryBytes(int instance);
+  Uint8List exportMount(int instance, String root);
 
   void globalInfo(int instance, String name, Uint8List out);
 

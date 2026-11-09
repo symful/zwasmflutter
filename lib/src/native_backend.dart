@@ -3,9 +3,30 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
+
 import 'common.dart';
 
 const String _libName = 'zwasm';
+
+/// Mirrors `ZWImportDesc` in `zwasm_plugin_shim.zig`.
+final class _ZWImportDesc extends Struct {
+  external Pointer<Uint8> module;
+  @Size()
+  external int moduleLen;
+  external Pointer<Uint8> name;
+  @Size()
+  external int nameLen;
+  external Pointer<Uint8> params;
+  @Size()
+  external int paramsLen;
+  external Pointer<Uint8> results;
+  @Size()
+  external int resultsLen;
+}
+
+typedef _HostCallbackNative = Int32 Function(
+    Pointer<Void>, Uint32, Pointer<Uint64>, Uint32, Pointer<Uint64>, Uint32);
 
 DynamicLibrary _openLibrary() {
   if (Platform.isAndroid || Platform.isLinux) {
@@ -27,6 +48,64 @@ Pointer<Uint8> Function(int) _allocFn() => _lib.lookupFunction<
 void Function(Pointer<Uint8>, int) _freeFn() => _lib.lookupFunction<
     Void Function(Pointer<Uint8>, Size),
     void Function(Pointer<Uint8>, int)>('zw_free');
+
+final class _HostBinding {
+  final int id;
+  final NativeCallable<_HostCallbackNative> callable;
+
+  _HostBinding(this.id, this.callable);
+}
+
+/// Holds the native staging buffers for one `instantiate` call. Everything is
+/// copied by the shim before this is freed.
+final class _ImportStaging {
+  final int count;
+  final Pointer<_ZWImportDesc> descs;
+  final List<Pointer<Uint8>> _blocks = [];
+
+  _ImportStaging(this.count)
+      : descs = count == 0 ? nullptr : calloc<_ZWImportDesc>(count);
+
+  Pointer<Uint8> _bytes(Uint8List b) {
+    final p = malloc<Uint8>(b.isEmpty ? 1 : b.length);
+    if (b.isNotEmpty) p.asTypedList(b.length).setAll(0, b);
+    _blocks.add(p);
+    return p;
+  }
+
+  Pointer<Uint8> _kinds(List<ZwasmValueKind> kinds) =>
+      _bytes(Uint8List.fromList([for (final k in kinds) k.index]));
+
+  void fill(List<ZwasmHostImport> imports) {
+    for (var i = 0; i < count; i++) {
+      final imp = imports[i];
+      final modBytes = utf8.encode(imp.module);
+      final nameBytes = utf8.encode(imp.name);
+      final mod = _bytes(Uint8List.fromList(modBytes));
+      final name = _bytes(Uint8List.fromList(nameBytes));
+      final params = _kinds(imp.params);
+      final results = _kinds(imp.results);
+      final d = descs[i];
+      d
+        ..module = mod
+        ..moduleLen = modBytes.length
+        ..name = name
+        ..nameLen = nameBytes.length
+        ..params = params
+        ..paramsLen = imp.params.length
+        ..results = results
+        ..resultsLen = imp.results.length;
+    }
+  }
+
+  void free() {
+    for (final p in _blocks) {
+      malloc.free(p);
+    }
+    _blocks.clear();
+    if (descs != nullptr) calloc.free(descs);
+  }
+}
 
 class NativeZwasmBackend implements ZwasmBackend {
   NativeZwasmBackend() {
@@ -64,6 +143,20 @@ class NativeZwasmBackend implements ZwasmBackend {
         int Function(Pointer<Void>, int, Pointer<Uint8>,
             int)>('zw_module_export_name');
 
+    _importCount = _lib.lookupFunction<Uint32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)>('zw_module_import_count');
+    _importKind = _lib.lookupFunction<
+        Uint8 Function(Pointer<Void>, Uint32),
+        int Function(Pointer<Void>, int)>('zw_module_import_kind');
+    _importModule = _lib.lookupFunction<
+        Uint32 Function(Pointer<Void>, Uint32, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, int, Pointer<Uint8>,
+            int)>('zw_module_import_module');
+    _importName = _lib.lookupFunction<
+        Uint32 Function(Pointer<Void>, Uint32, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, int, Pointer<Uint8>,
+            int)>('zw_module_import_name');
+
     _wasiNew = _lib.lookupFunction<Pointer<Void> Function(),
         Pointer<Void> Function()>('zw_wasi_config_new');
     _wasiDelete = _lib.lookupFunction<Void Function(Pointer<Void>),
@@ -78,11 +171,44 @@ class NativeZwasmBackend implements ZwasmBackend {
             int)>('zw_wasi_config_add_env');
     _wasiStdio = _lib.lookupFunction<Void Function(Pointer<Void>),
         void Function(Pointer<Void>)>('zw_wasi_config_inherit_stdio');
+    _wasiPreopen = _lib.lookupFunction<
+        Int32 Function(
+            Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
+            int)>('zw_wasi_config_preopen_dir');
+    _wasiAddFile = _lib.lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>,
+            Size, Int32),
+        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>, int,
+            int)>('zw_wasi_config_add_file');
+    _wasiAddDir = _lib.lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Uint8>, Size, Int32),
+        int Function(Pointer<Void>, Pointer<Uint8>, int,
+            int)>('zw_wasi_config_add_dir');
 
-    _instanceNew = _lib.lookupFunction<
-        Pointer<Void> Function(Pointer<Void>, Uint8, Int64, Int64, Pointer<Void>),
-        Pointer<Void> Function(Pointer<Void>, int, int, int,
-            Pointer<Void>)>('zw_instance_new');
+    _instanceNewWithImports = _lib.lookupFunction<
+        Pointer<Void> Function(
+            Pointer<Void>,
+            Uint8,
+            Int64,
+            Int64,
+            Pointer<Void>,
+            Pointer<_ZWImportDesc>,
+            Uint32,
+            Pointer<Void>,
+            Pointer<NativeFunction<_HostCallbackNative>>),
+        Pointer<Void> Function(
+            Pointer<Void>,
+            int,
+            int,
+            int,
+            Pointer<Void>,
+            Pointer<_ZWImportDesc>,
+            int,
+            Pointer<Void>,
+            Pointer<NativeFunction<_HostCallbackNative>>)>(
+        'zw_instance_new_with_imports');
+
     _instanceDelete = _lib.lookupFunction<Void Function(Pointer<Void>),
         void Function(Pointer<Void>)>('zw_instance_delete');
     _funcSig = _lib.lookupFunction<
@@ -120,6 +246,11 @@ class NativeZwasmBackend implements ZwasmBackend {
     _memGrow = _lib.lookupFunction<
         Int64 Function(Pointer<Void>, Uint32),
         int Function(Pointer<Void>, int)>('zw_instance_memory_grow');
+    _exportMount = _lib.lookupFunction<
+        Uint64 Function(
+            Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
+            int)>('zw_instance_export_mount');
 
     _globalInfo = _lib.lookupFunction<
         Int32 Function(Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>,
@@ -138,6 +269,11 @@ class NativeZwasmBackend implements ZwasmBackend {
 
   late final Pointer<Uint8> Function(int) _alloc;
   late final void Function(Pointer<Uint8>, int) _free;
+
+  final Map<int, List<ZwasmHostImport>> _hostImports = {};
+  final Map<int, _HostBinding> _hostBindings = {};
+  int _nextHostId = 1;
+  String? _pendingHostError;
   late final int Function() _versionLen;
   late final Pointer<Uint8> Function() _versionPtr;
   late final int Function() _lastCode;
@@ -150,6 +286,10 @@ class NativeZwasmBackend implements ZwasmBackend {
   late final int Function(Pointer<Void>) _exportCount;
   late final int Function(Pointer<Void>, int) _exportKind;
   late final int Function(Pointer<Void>, int, Pointer<Uint8>, int) _exportName;
+  late final int Function(Pointer<Void>) _importCount;
+  late final int Function(Pointer<Void>, int) _importKind;
+  late final int Function(Pointer<Void>, int, Pointer<Uint8>, int) _importModule;
+  late final int Function(Pointer<Void>, int, Pointer<Uint8>, int) _importName;
 
   late final Pointer<Void> Function() _wasiNew;
   late final void Function(Pointer<Void>) _wasiDelete;
@@ -157,9 +297,24 @@ class NativeZwasmBackend implements ZwasmBackend {
   late final int Function(
       Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>, int) _wasiAddEnv;
   late final void Function(Pointer<Void>) _wasiStdio;
+  late final int Function(
+      Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>, int) _wasiPreopen;
+  late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
+      int, int) _wasiAddFile;
+  late final int Function(
+      Pointer<Void>, Pointer<Uint8>, int, int) _wasiAddDir;
 
   late final Pointer<Void> Function(
-          Pointer<Void>, int, int, int, Pointer<Void>) _instanceNew;
+          Pointer<Void>,
+          int,
+          int,
+          int,
+          Pointer<Void>,
+          Pointer<_ZWImportDesc>,
+          int,
+          Pointer<Void>,
+          Pointer<NativeFunction<_HostCallbackNative>>) _instanceNewWithImports;
+
   late final void Function(Pointer<Void>) _instanceDelete;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
       Pointer<Uint32>, Pointer<Uint32>) _funcSig;
@@ -177,6 +332,8 @@ class NativeZwasmBackend implements ZwasmBackend {
   late final int Function(Pointer<Void>) _memPages;
   late final int Function(Pointer<Void>) _memData;
   late final int Function(Pointer<Void>, int) _memGrow;
+  late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
+      int) _exportMount;
 
   late final int Function(
       Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
@@ -199,12 +356,16 @@ class NativeZwasmBackend implements ZwasmBackend {
   String get lastError {
     final p = _alloc(1024);
     if (p == nullptr) return '';
+    String message;
     try {
       final n = _lastMessage(p, 1024);
-      return utf8.decode(p.asTypedList(n), allowMalformed: true);
+      message = utf8.decode(p.asTypedList(n), allowMalformed: true);
     } finally {
       _free(p, 1024);
     }
+    final host = _pendingHostError;
+    _pendingHostError = null;
+    return host == null ? message : '$message ($host)';
   }
 
   @override
@@ -262,6 +423,38 @@ class NativeZwasmBackend implements ZwasmBackend {
   }
 
   @override
+  int moduleImportCount(int module) => _importCount(_h(module));
+
+  @override
+  int moduleImportKind(int module, int index) =>
+      _importKind(_h(module), index);
+
+  @override
+  String moduleImportModule(int module, int index) =>
+      _readName((b, i, p, c) => _importModule(b, i, p, c), module, index);
+
+  @override
+  String moduleImportName(int module, int index) =>
+      _readName((b, i, p, c) => _importName(b, i, p, c), module, index);
+
+  String _readName(
+      int Function(Pointer<Void>, int, Pointer<Uint8>, int) read,
+      int handle,
+      int index) {
+    var cap = 256;
+    while (true) {
+      final buf = _alloc(cap);
+      if (buf == nullptr) _fail();
+      final full = read(_h(handle), index, buf, cap);
+      final name = utf8.decode(buf.asTypedList(full.clamp(0, cap)),
+          allowMalformed: true);
+      _free(buf, cap);
+      if (full <= cap) return name;
+      cap = full;
+    }
+  }
+
+  @override
   int wasiConfigNew() {
     final h = _wasiNew();
     if (h == nullptr) _fail();
@@ -300,21 +493,146 @@ class NativeZwasmBackend implements ZwasmBackend {
   void wasiInheritStdio(int config) => _wasiStdio(_h(config));
 
   @override
-  int instanceNew(int module, ZwasmEngineKind engine, int? fuel,
-      int? maxMemoryPages, int? wasiConfig) {
-    final h = _instanceNew(
-      _h(module),
-      engine.index,
-      fuel ?? -1,
-      maxMemoryPages ?? -1,
-      wasiConfig == null ? nullptr : _h(wasiConfig),
-    );
-    if (h == nullptr) _fail();
-    return h.address;
+  void wasiPreopenDir(int config, String hostPath, String guestPath) {
+    if (Platform.isWindows) {
+      throw UnsupportedError(
+          'WASI preopens are disabled on Windows: the zwasm std.Io path '
+          'crashes process teardown after a preopen is materialized. '
+          'Use the host VFS imports instead.');
+    }
+    final hb = _utf8(hostPath);
+    final gb = _utf8(guestPath);
+    final hp = _stage(hb);
+    final gp = _stage(gb);
+    try {
+      final rc = _wasiPreopen(_h(config), hp, hb.length, gp, gb.length);
+      if (rc != 0) _fail();
+    } finally {
+      _unstage(hp, hb.length);
+      _unstage(gp, gb.length);
+    }
   }
 
   @override
-  void instanceDelete(int instance) => _instanceDelete(_h(instance));
+  void wasiAddFile(
+      int config, String guestPath, Uint8List data, bool writable) {
+    final pb = _utf8(guestPath);
+    final pp = _stage(pb);
+    final dp = _stage(data);
+    try {
+      final rc = _wasiAddFile(
+          _h(config), pp, pb.length, dp, data.length, writable ? 1 : 0);
+      if (rc != 0) _fail();
+    } finally {
+      _unstage(pp, pb.length);
+      _unstage(dp, data.length);
+    }
+  }
+
+  @override
+  void wasiAddDir(int config, String guestPath, bool writable) {
+    final pb = _utf8(guestPath);
+    final pp = _stage(pb);
+    try {
+      final rc = _wasiAddDir(
+          _h(config), pp, pb.length, writable ? 1 : 0);
+      if (rc != 0) _fail();
+    } finally {
+      _unstage(pp, pb.length);
+    }
+  }
+
+  @override
+  int instanceNew(int module, ZwasmEngineKind engine, int? fuel,
+      int? maxMemoryPages, int? wasiConfig, List<ZwasmHostImport> imports) {
+    final wasi = wasiConfig == null ? nullptr : _h(wasiConfig);
+    if (imports.isEmpty) {
+      final h = _instanceNewWithImports(
+        _h(module),
+        engine.index,
+        fuel ?? -1,
+        maxMemoryPages ?? -1,
+        wasi,
+        nullptr,
+        0,
+        nullptr,
+        Pointer<NativeFunction<_HostCallbackNative>>.fromAddress(0),
+      );
+      if (h == nullptr) _fail();
+      return h.address;
+    }
+
+    final id = _nextHostId++;
+    _hostImports[id] = imports;
+    final callable = NativeCallable<_HostCallbackNative>.isolateLocal(
+      (Pointer<Void> ctx, int index, Pointer<Uint64> args, int nArgs,
+              Pointer<Uint64> results, int nResults) =>
+          _dispatchHost(id, index, args, nArgs, results, nResults),
+      exceptionalReturn: 1,
+    );
+    final staging = _ImportStaging(imports.length);
+    try {
+      staging.fill(imports);
+      final h = _instanceNewWithImports(
+        _h(module),
+        engine.index,
+        fuel ?? -1,
+        maxMemoryPages ?? -1,
+        wasi,
+        staging.descs,
+        imports.length,
+        Pointer<Void>.fromAddress(id),
+        callable.nativeFunction,
+      );
+      if (h == nullptr) _fail();
+      _hostBindings[h.address] = _HostBinding(id, callable);
+      return h.address;
+    } catch (_) {
+      callable.close();
+      _hostImports.remove(id);
+      rethrow;
+    } finally {
+      staging.free();
+    }
+  }
+
+  int _dispatchHost(int id, int index, Pointer<Uint64> args, int nArgs,
+      Pointer<Uint64> results, int nResults) {
+    final imports = _hostImports[id];
+    if (imports == null || index < 0 || index >= imports.length) return 1;
+    final imp = imports[index];
+    if (imp.params.length != nArgs || imp.results.length != nResults) return 1;
+
+    final input = <ZwasmValue>[];
+    for (var i = 0; i < nArgs; i++) {
+      final bits = args[i];
+      input.add(ZwasmValue.fromHalves(imp.params[i], bits & 0xFFFFFFFF,
+          (bits >> 32) & 0xFFFFFFFF));
+    }
+    try {
+      final output = imp.function(input);
+      if (output.length != nResults) return 1;
+      for (var i = 0; i < nResults; i++) {
+        final v = output[i];
+        if (v.kind != imp.results[i]) return 1;
+        results[i] = v.bits;
+      }
+      return 0;
+    } catch (e) {
+      _pendingHostError = e.toString();
+      return 1;
+    }
+  }
+
+  @override
+  void instanceDelete(int instance) {
+    _instanceDelete(_h(instance));
+    final binding = _hostBindings.remove(instance);
+    if (binding != null) {
+      _hostImports.remove(binding.id);
+      binding.callable.close();
+    }
+  }
 
   @override
   ZwasmSignature funcSig(int instance, String name) {
@@ -411,6 +729,27 @@ class NativeZwasmBackend implements ZwasmBackend {
     final size = _memSize(_h(instance));
     if (ptr == 0 || size == 0) return Uint8List(0);
     return Pointer<Uint8>.fromAddress(ptr).asTypedList(size);
+  }
+
+  @override
+  Uint8List exportMount(int instance, String root) {
+    final rb = _utf8(root);
+    final rp = _stage(rb);
+    try {
+      final need =
+          _exportMount(_h(instance), rp, rb.length, nullptr, 0);
+      if (need == 0) return Uint8List(0);
+      final out = malloc<Uint8>(need);
+      try {
+        final got = _exportMount(_h(instance), rp, rb.length, out, need);
+        if (got != need) _fail();
+        return Uint8List.fromList(out.asTypedList(need));
+      } finally {
+        malloc.free(out);
+      }
+    } finally {
+      _unstage(rp, rb.length);
+    }
   }
 
   @override

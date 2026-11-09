@@ -13,10 +13,15 @@ EXPORTS
   zw_module_export_count
   zw_module_export_kind
   zw_module_export_name
+  zw_module_import_count
+  zw_module_import_kind
+  zw_module_import_module
+  zw_module_import_name
   zw_instance_func_sig
   zw_instance_invoke
   zw_instance_wasi_exit_code
   zw_instance_new
+  zw_instance_new_with_imports
   zw_instance_delete
   zw_instance_set_fuel
   zw_instance_fuel_remaining
@@ -30,8 +35,12 @@ EXPORTS
   zw_instance_global_info
   zw_instance_global_get
   zw_instance_global_set
+  zw_instance_export_mount
   zw_wasi_config_new
   zw_wasi_config_delete
   zw_wasi_config_add_arg
   zw_wasi_config_add_env
   zw_wasi_config_inherit_stdio
+  zw_wasi_config_preopen_dir
+  zw_wasi_config_add_file
+  zw_wasi_config_add_dir

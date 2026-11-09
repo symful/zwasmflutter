@@ -11,6 +11,9 @@ export 'src/common.dart'
         ZwasmException,
         ZwasmExport,
         ZwasmExternKind,
+        ZwasmHostFunction,
+        ZwasmHostImport,
+        ZwasmImportInfo,
         ZwasmSignature,
         ZwasmValue,
         ZwasmValueKind;
@@ -65,33 +68,48 @@ class ZwasmModule {
   final int _handle;
   bool _disposed = false;
   late final List<ZwasmExport> exports = _readExports();
+  late final List<ZwasmImportInfo> imports = _readImports();
 
   ZwasmModule._(this._handle);
 
-  List<ZwasmExport> _readExports() {
-    final b = Zwasm._backend;
-    final n = b.moduleExportCount(_handle);
-    return List.generate(n, (i) {
-      final kind = switch (b.moduleExportKind(_handle, i)) {
+  static ZwasmExternKind _kindFromCode(int code) => switch (code) {
         0 => ZwasmExternKind.function,
         1 => ZwasmExternKind.table,
         2 => ZwasmExternKind.memory,
         3 => ZwasmExternKind.global,
         _ => ZwasmExternKind.tag,
       };
-      return ZwasmExport(b.moduleExportName(_handle, i), kind);
-    });
+
+  List<ZwasmExport> _readExports() {
+    final b = Zwasm._backend;
+    final n = b.moduleExportCount(_handle);
+    return List.generate(
+        n, (i) => ZwasmExport(b.moduleExportName(_handle, i),
+            _kindFromCode(b.moduleExportKind(_handle, i))));
+  }
+
+  List<ZwasmImportInfo> _readImports() {
+    final b = Zwasm._backend;
+    final n = b.moduleImportCount(_handle);
+    return List.generate(
+        n,
+        (i) => ZwasmImportInfo(
+            b.moduleImportModule(_handle, i),
+            b.moduleImportName(_handle, i),
+            _kindFromCode(b.moduleImportKind(_handle, i))));
   }
 
   /// Instantiates the module.
   ///
   /// [fuel] and [maxMemoryPages] are metered budgets; `null` means unmetered.
-  /// [wasi] installs a WASI 0.1 host (args/envs/stdio).
+  /// [wasi] installs a WASI 0.1 host (args/envs/stdio/preopens). [imports]
+  /// supplies Dart implementations of the module's function imports.
   ZwasmInstance instantiate({
     ZwasmEngineChoice engine = ZwasmEngineChoice.auto,
     int? fuel,
     int? maxMemoryPages,
     ZwasmWasiConfig? wasi,
+    List<ZwasmHostImport> imports = const [],
   }) {
     _check();
     final k = switch (engine) {
@@ -101,7 +119,7 @@ class ZwasmModule {
     };
     return ZwasmInstance._(
       Zwasm._backend.instanceNew(
-          _handle, k, fuel, maxMemoryPages, wasi?._handle),
+          _handle, k, fuel, maxMemoryPages, wasi?._handle, imports),
       exports,
     );
   }
@@ -201,6 +219,11 @@ class ZwasmInstance {
     final v = Zwasm._backend.wasiExitCode(_handle);
     return v < 0 ? null : v;
   }
+
+  /// Serializes the in-memory VFS mount at [root] (e.g. `/data`).
+  /// Format: u32 count, then { u32 path_len, path, u64 size, bytes }.
+  Uint8List exportMount(String root) =>
+      Zwasm._backend.exportMount(_handle, root);
 
   void dispose() {
     if (_disposed) return;
@@ -318,6 +341,26 @@ class ZwasmWasiConfig {
   void inheritStdio() {
     _check();
     Zwasm._backend.wasiInheritStdio(_handle);
+  }
+
+  /// Maps [hostPath] into the guest at [guestPath] (a WASI preview1 preopen,
+  /// fd 3, 4, ... in call order). Native only; unsupported on the web.
+  void preopenDir(String hostPath, String guestPath) {
+    _check();
+    Zwasm._backend.wasiPreopenDir(_handle, hostPath, guestPath);
+  }
+
+  /// Adds a file to the in-memory WASI VFS. [guestPath] must be under
+  /// `/app`, `/data`, or `/tmp`. `/app` is read-only.
+  void addFile(String guestPath, Uint8List data, {bool writable = false}) {
+    _check();
+    Zwasm._backend.wasiAddFile(_handle, guestPath, data, writable);
+  }
+
+  /// Adds an explicit directory to the in-memory WASI VFS.
+  void addDir(String guestPath, {bool writable = false}) {
+    _check();
+    Zwasm._backend.wasiAddDir(_handle, guestPath, writable);
   }
 
   void dispose() {

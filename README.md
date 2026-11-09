@@ -61,17 +61,20 @@ interpreter.
 * `Zwasm.initialize()` — loads the web backend (no-op natively). Call once
   before creating an engine; safe to await on every platform.
 * `ZwasmEngine` — `compile(Uint8List)` → `ZwasmModule`, `dispose()`.
-* `ZwasmModule` — `exports` (`List<ZwasmExport>`), `instantiate(...)`,
-  `dispose()`.
-  * `instantiate({engine, fuel, maxMemoryPages, wasi})`
+* `ZwasmModule` — `exports` (`List<ZwasmExport>`), `imports`
+  (`List<ZwasmImportInfo>`), `instantiate(...)`, `dispose()`.
+  * `instantiate({engine, fuel, maxMemoryPages, wasi, imports})`
 * `ZwasmInstance` — `signatureOf(name)`, `findFunction(name)`,
   `mainFunction`, `memory`, `findGlobal(name)`, `setFuel`, `fuelRemaining`,
   `setMemoryLimit`, `interrupt`, `clearInterrupt`, `wasiExitCode`,
-  `dispose()`.
+  `exportMount(root)`, `dispose()`.
 * `ZwasmFunction` — `parameterTypes`, `resultTypes`, `call(List<ZwasmValue>)`.
 * `ZwasmMemory` — `sizeInBytes`, `pages`, `asUint8List()`, `grow(deltaPages)`.
 * `ZwasmGlobal` — `kind`, `mutable`, `value` (get/set).
-* `ZwasmWasiConfig` — `addArg`, `addEnv`, `inheritStdio`, `dispose()`.
+* `ZwasmHostImport` — `module`, `name`, `params`, `results`, `function`:
+  a Dart implementation of one host import.
+* `ZwasmWasiConfig` — `addArg`, `addEnv`, `inheritStdio`, `preopenDir`,
+  `dispose()`.
 * `ZwasmValue` — `i32`, `i64`, `f32`, `f64`, `funcref`, `externref`;
   `asInt`, `asDouble`.
 * `ZwasmException` — thrown for compile / instantiate / trap / binding errors.
@@ -83,6 +86,33 @@ interpreter.
 Values cross the ABI as two 32-bit halves, so `f64` and `i64` are exact on
 every platform. `ZwasmValue.asInt` for an `i64` above 2^53 is lossy on the web
 (Dart web integers are JavaScript numbers); use `asDouble` for large floats.
+
+### Host imports
+
+A module's function imports can be implemented in Dart. Signatures must match
+the module's declared types exactly; the callback runs synchronously on the
+wasm thread and must not call back into the same instance.
+
+```dart
+final instance = module.instantiate(
+  imports: [
+    ZwasmHostImport(
+      module: 'env',
+      name: 'add',
+      params: const [ZwasmValueKind.i32, ZwasmValueKind.i32],
+      results: const [ZwasmValueKind.i32],
+      function: (args) => [
+        ZwasmValue.i32(args[0].asInt + args[1].asInt),
+      ],
+    ),
+  ],
+);
+```
+
+Inspect imports before instantiating with `module.imports`. Host imports are
+implemented for native FFI targets (Windows, Android, Linux); the web backend
+throws `UnsupportedError` because the JS bridge cannot pass a wasm callback
+pointer yet.
 
 ### WASI
 
@@ -98,6 +128,40 @@ print(instance.wasiExitCode);              // 0
 ```
 
 `ZwasmWasiConfig` is only read during `instantiate`; dispose it afterwards.
+
+#### Preopened directories
+
+```dart
+final wasi = ZwasmWasiConfig()..preopenDir('.', '/sandbox');
+```
+
+Native only, and **disabled on Windows**: after a preopen is materialized,
+zwasm's `std.Io` teardown crashes the process when the Dart runtime exits.
+The shim still exposes `zw_wasi_config_preopen_dir`, but the Dart backend
+throws `UnsupportedError` on Windows until the upstream issue is fixed. Use
+the in-memory VFS instead. Web has no host directories, so preopens are
+unsupported there too.
+
+### In-memory WASI VFS
+
+For cartridges, use the in-memory filesystem instead of host preopens:
+
+```dart
+final wasi = ZwasmWasiConfig()
+  ..addFile('/app/hello.txt', Uint8List.fromList(utf8.encode('hello')))
+  ..addDir('/data', writable: true);
+
+final instance = module.instantiate(wasi: wasi);
+// ... run the cart ...
+final data = instance.exportMount('/data');
+```
+
+Mounts: `/app` read-only, `/data` and `/tmp` writable. There is no host path
+involved and no `std.Io`; the same code works on native and web.
+
+`exportMount(root)` returns:
+`u32 count`, then per file `{ u32 path_len, path, u64 size, bytes }`.
+The host can persist that blob per profile/cart and restore it later.
 
 ## Web setup
 

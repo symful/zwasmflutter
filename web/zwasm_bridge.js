@@ -183,6 +183,27 @@
     }
   }
 
+  function moduleImportText(fn, module, index) {
+    requireInit();
+    var cap = 256;
+    for (;;) {
+      var p = alloc(cap);
+      var full = num(fn(BigInt(module), index, BigInt(p), BigInt(cap)));
+      var s = decoder.decode(mem8().subarray(p, p + Math.min(full, cap)));
+      free(p, cap);
+      if (full <= cap) return s;
+      cap = full;
+    }
+  }
+
+  function moduleImportModule(module, index) {
+    return moduleImportText(E.zw_module_import_module, module, index);
+  }
+
+  function moduleImportName(module, index) {
+    return moduleImportText(E.zw_module_import_name, module, index);
+  }
+
   function funcSig(instance, name) {
     requireInit();
     var nb = encoder.encode(name);
@@ -310,10 +331,51 @@
     return mem8().slice(p, p + size);
   }
 
+  function addDir(config, path, writable) {
+    requireInit();
+    var b = encoder.encode(path);
+    var p = allocBytes(b);
+    var rc = num(E.zw_wasi_config_add_dir(BigInt(config), BigInt(p), BigInt(b.length), writable));
+    free(p, b.length || 1);
+    return rc;
+  }
+
+  function addFile(config, path, data, writable) {
+    requireInit();
+    var pb = encoder.encode(path);
+    var pp = allocBytes(pb);
+    var dp = allocBytes(data);
+    var rc = num(E.zw_wasi_config_add_file(
+      BigInt(config), BigInt(pp), BigInt(pb.length),
+      BigInt(dp), BigInt(data.length), writable));
+    free(pp, pb.length || 1);
+    free(dp, data.length || 1);
+    return rc;
+  }
+
+  function exportMount(instance, root) {
+    requireInit();
+    var rb = encoder.encode(root);
+    var rp = allocBytes(rb);
+    var need = num(E.zw_instance_export_mount(
+      BigInt(instance), BigInt(rp), BigInt(rb.length), 0n, 0n));
+    if (!need) {
+      free(rp, rb.length || 1);
+      return new Uint8Array(0);
+    }
+    var buf = alloc(need);
+    E.zw_instance_export_mount(
+      BigInt(instance), BigInt(rp), BigInt(rb.length), BigInt(buf), BigInt(need));
+    var out = mem8().slice(buf, buf + need);
+    free(buf, need);
+    free(rp, rb.length || 1);
+    return out;
+  }
+
   globalThis.ZwasmBridge = Object.freeze({
     // Bumped whenever the signatures or the globalThis shape changes. The
     // Dart web backend refuses to run against a different version.
-    apiVersion: 1,
+    apiVersion: 4,
     abi: 'wasm64-wasi-interp',
     init: init,
     version: version,
@@ -329,11 +391,21 @@
     moduleExportKind: function (h, i) { requireInit(); return num(E.zw_module_export_kind(BigInt(h), i)); },
     moduleExportName: moduleExportName,
 
+    moduleImportCount: function (h) { requireInit(); return num(E.zw_module_import_count(BigInt(h))); },
+    moduleImportKind: function (h, i) { requireInit(); return num(E.zw_module_import_kind(BigInt(h), i)); },
+    moduleImportModule: moduleImportModule,
+    moduleImportName: moduleImportName,
+
     wasiConfigNew: function () { requireInit(); return num(E.zw_wasi_config_new()); },
     wasiConfigDelete: function (h) { requireInit(); E.zw_wasi_config_delete(BigInt(h)); },
     wasiConfigAddArg: addArg,
     wasiConfigAddEnv: addEnv,
     wasiConfigInheritStdio: function (h) { requireInit(); E.zw_wasi_config_inherit_stdio(BigInt(h)); },
+    wasiConfigPreopenDir: function () {
+      throw new Error('WASI preopens are not supported on web');
+    },
+    wasiConfigAddFile: addFile,
+    wasiConfigAddDir: addDir,
 
     instanceNew: function (module, engine, fuel, maxPages, wasiConfig) {
       requireInit();
@@ -356,6 +428,7 @@
     memoryPages: function (h) { requireInit(); return num(E.zw_instance_memory_pages(BigInt(h))); },
     memoryGrow: function (h, delta) { requireInit(); return num(E.zw_instance_memory_grow(BigInt(h), delta)); },
     memoryBytes: memoryBytes,
+    exportMount: exportMount,
 
     globalInfo: globalInfo,
     globalGet: globalGet,

@@ -26,11 +26,22 @@ extension type _Bridge(JSObject _) implements JSObject {
   external int moduleExportKind(int module, int index);
   external String? moduleExportName(int module, int index);
 
+  external int moduleImportCount(int module);
+  external int moduleImportKind(int module, int index);
+  external String? moduleImportModule(int module, int index);
+  external String? moduleImportName(int module, int index);
+
   external int wasiConfigNew();
   external void wasiConfigDelete(int config);
   external int wasiConfigAddArg(int config, String arg);
   external int wasiConfigAddEnv(int config, String key, String value);
   external void wasiConfigInheritStdio(int config);
+  external int wasiConfigPreopenDir(
+      int config, String hostPath, String guestPath);
+  external int wasiConfigAddFile(
+      int config, String guestPath, JSUint8Array data, int writable);
+  external int wasiConfigAddDir(
+      int config, String guestPath, int writable);
 
   external int instanceNew(
       int module, int engine, int fuel, int maxMemoryPages, int wasiConfig);
@@ -51,6 +62,7 @@ extension type _Bridge(JSObject _) implements JSObject {
   external int memoryPages(int instance);
   external int memoryGrow(int instance, int delta);
   external JSUint8Array memoryBytes(int instance);
+  external JSUint8Array exportMount(int instance, String root);
 
   external JSUint8Array? globalInfo(int instance, String name);
   external JSUint32Array globalGet(int instance, String name);
@@ -67,9 +79,9 @@ class WebZwasmBackend implements ZwasmBackend {
     final bytes =
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     try {
-      if (_bridge.apiVersion != 1) {
+      if (_bridge.apiVersion != 4) {
         throw StateError(
-            'zwasm web bridge API version ${_bridge.apiVersion}, expected 1');
+            'zwasm web bridge API version ${_bridge.apiVersion}, expected 4');
       }
       await _bridge.init(bytes.toJS).toDart;
     } catch (e) {
@@ -115,6 +127,21 @@ class WebZwasmBackend implements ZwasmBackend {
       _bridge.moduleExportName(module, index) ?? '';
 
   @override
+  int moduleImportCount(int module) => _bridge.moduleImportCount(module);
+
+  @override
+  int moduleImportKind(int module, int index) =>
+      _bridge.moduleImportKind(module, index);
+
+  @override
+  String moduleImportModule(int module, int index) =>
+      _bridge.moduleImportModule(module, index) ?? '';
+
+  @override
+  String moduleImportName(int module, int index) =>
+      _bridge.moduleImportName(module, index) ?? '';
+
+  @override
   int wasiConfigNew() => _bridge.wasiConfigNew();
 
   @override
@@ -132,10 +159,35 @@ class WebZwasmBackend implements ZwasmBackend {
   void wasiInheritStdio(int config) => _bridge.wasiConfigInheritStdio(config);
 
   @override
+  void wasiPreopenDir(int config, String hostPath, String guestPath) {
+    _bridge.wasiConfigPreopenDir(config, hostPath, guestPath);
+  }
+
+  @override
+  void wasiAddFile(
+      int config, String guestPath, Uint8List data, bool writable) {
+    final rc = _bridge.wasiConfigAddFile(
+        config, guestPath, data.toJS, writable ? 1 : 0);
+    if (rc != 0) _fail();
+  }
+
+  @override
+  void wasiAddDir(int config, String guestPath, bool writable) {
+    final rc =
+        _bridge.wasiConfigAddDir(config, guestPath, writable ? 1 : 0);
+    if (rc != 0) _fail();
+  }
+
+  @override
   int instanceNew(int module, ZwasmEngineKind engine, int? fuel,
-          int? maxMemoryPages, int? wasiConfig) =>
-      _bridge.instanceNew(module, engine.index, fuel ?? -1,
-          maxMemoryPages ?? -1, wasiConfig ?? 0);
+      int? maxMemoryPages, int? wasiConfig, List<ZwasmHostImport> imports) {
+    if (imports.isNotEmpty) {
+      throw UnsupportedError(
+          'Dart host imports are not supported by the zwasm web backend yet');
+    }
+    return _bridge.instanceNew(module, engine.index, fuel ?? -1,
+        maxMemoryPages ?? -1, wasiConfig ?? 0);
+  }
 
   @override
   void instanceDelete(int instance) => _bridge.instanceDelete(instance);
@@ -207,6 +259,10 @@ class WebZwasmBackend implements ZwasmBackend {
 
   @override
   Uint8List memoryBytes(int instance) => _bridge.memoryBytes(instance).toDart;
+
+  @override
+  Uint8List exportMount(int instance, String root) =>
+      _bridge.exportMount(instance, root).toDart;
 
   @override
   void globalInfo(int instance, String name, Uint8List out) {
