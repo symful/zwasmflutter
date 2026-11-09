@@ -16,7 +16,8 @@ export 'src/common.dart'
         ZwasmImportInfo,
         ZwasmSignature,
         ZwasmValue,
-        ZwasmValueKind;
+        ZwasmValueKind,
+        ZwasmVfsWriteCallback;
 
 /// Entry point for the zwasm runtime.
 ///
@@ -224,6 +225,15 @@ class ZwasmInstance {
   /// Format: u32 count, then { u32 path_len, path, u64 size, bytes }.
   Uint8List exportMount(String root) =>
       Zwasm._backend.exportMount(_handle, root);
+
+  /// Replaces the files under [root] from an `exportMount` blob.
+  void importMount(String root, Uint8List data) =>
+      Zwasm._backend.importMount(_handle, root, data);
+
+  /// Installs a write-through callback for `/data` file writes. The callback
+  /// runs synchronously on the wasm thread; return normally to accept.
+  void setVfsWriteCallback(ZwasmVfsWriteCallback? callback) =>
+      Zwasm._backend.setVfsWriteCallback(_handle, callback);
 
   void dispose() {
     if (_disposed) return;

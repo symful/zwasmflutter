@@ -67,7 +67,8 @@ interpreter.
 * `ZwasmInstance` — `signatureOf(name)`, `findFunction(name)`,
   `mainFunction`, `memory`, `findGlobal(name)`, `setFuel`, `fuelRemaining`,
   `setMemoryLimit`, `interrupt`, `clearInterrupt`, `wasiExitCode`,
-  `exportMount(root)`, `dispose()`.
+  `exportMount(root)`, `importMount(root)`, `setVfsWriteCallback`,
+  `dispose()`.
 * `ZwasmFunction` — `parameterTypes`, `resultTypes`, `call(List<ZwasmValue>)`.
 * `ZwasmMemory` — `sizeInBytes`, `pages`, `asUint8List()`, `grow(deltaPages)`.
 * `ZwasmGlobal` — `kind`, `mutable`, `value` (get/set).
@@ -161,7 +162,20 @@ involved and no `std.Io`; the same code works on native and web.
 
 `exportMount(root)` returns:
 `u32 count`, then per file `{ u32 path_len, path, u64 size, bytes }`.
-The host can persist that blob per profile/cart and restore it later.
+The host can persist that blob per profile/cart and restore it later with
+`importMount(root, blob)`.
+
+Write-through:
+
+```dart
+instance.setVfsWriteCallback((path, offset, bytes) {
+  // persist the write immediately
+});
+```
+
+The callback fires on every guest file write (including zero-length flushes)
+and runs synchronously on the wasm thread. Web throws for now because the
+callback needs web host imports.
 
 ## Web setup
 

@@ -63,6 +63,8 @@ extension type _Bridge(JSObject _) implements JSObject {
   external int memoryGrow(int instance, int delta);
   external JSUint8Array memoryBytes(int instance);
   external JSUint8Array exportMount(int instance, String root);
+  external int importMount(
+      int instance, String root, JSUint8Array data);
 
   external JSUint8Array? globalInfo(int instance, String name);
   external JSUint32Array globalGet(int instance, String name);
@@ -79,9 +81,9 @@ class WebZwasmBackend implements ZwasmBackend {
     final bytes =
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     try {
-      if (_bridge.apiVersion != 4) {
+      if (_bridge.apiVersion != 5) {
         throw StateError(
-            'zwasm web bridge API version ${_bridge.apiVersion}, expected 4');
+            'zwasm web bridge API version ${_bridge.apiVersion}, expected 5');
       }
       await _bridge.init(bytes.toJS).toDart;
     } catch (e) {
@@ -263,6 +265,20 @@ class WebZwasmBackend implements ZwasmBackend {
   @override
   Uint8List exportMount(int instance, String root) =>
       _bridge.exportMount(instance, root).toDart;
+
+  @override
+  void importMount(int instance, String root, Uint8List data) {
+    final rc = _bridge.importMount(instance, root, data.toJS);
+    if (rc != 0) _fail();
+  }
+
+  @override
+  void setVfsWriteCallback(
+      int instance, ZwasmVfsWriteCallback? callback) {
+    throw UnsupportedError(
+        'VFS write-through callbacks need web host imports, which are not '
+        'implemented yet');
+  }
 
   @override
   void globalInfo(int instance, String name, Uint8List out) {

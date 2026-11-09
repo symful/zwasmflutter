@@ -136,6 +136,10 @@ class ZwasmImportInfo {
 /// Dart implementation of one host import.
 typedef ZwasmHostFunction = List<ZwasmValue> Function(List<ZwasmValue> args);
 
+/// Receives a write-through VFS file write.
+typedef ZwasmVfsWriteCallback = void Function(
+    String path, int offset, Uint8List data);
+
 /// Registers a Dart function as a host import. The signature must match the
 /// importing module's declared type exactly; [function] receives one value per
 /// parameter and must return one value per result.
@@ -211,6 +215,9 @@ abstract class ZwasmBackend {
   int memoryGrow(int instance, int delta);
   Uint8List memoryBytes(int instance);
   Uint8List exportMount(int instance, String root);
+  void importMount(int instance, String root, Uint8List data);
+  void setVfsWriteCallback(
+      int instance, ZwasmVfsWriteCallback? callback);
 
   void globalInfo(int instance, String name, Uint8List out);
 

@@ -372,10 +372,23 @@
     return out;
   }
 
+  function importMount(instance, root, data) {
+    requireInit();
+    var rb = encoder.encode(root);
+    var rp = allocBytes(rb);
+    var dp = allocBytes(data);
+    var rc = num(E.zw_instance_import_mount(
+      BigInt(instance), BigInt(rp), BigInt(rb.length),
+      BigInt(dp), BigInt(data.length)));
+    free(rp, rb.length || 1);
+    free(dp, data.length || 1);
+    return rc;
+  }
+
   globalThis.ZwasmBridge = Object.freeze({
     // Bumped whenever the signatures or the globalThis shape changes. The
     // Dart web backend refuses to run against a different version.
-    apiVersion: 4,
+    apiVersion: 5,
     abi: 'wasm64-wasi-interp',
     init: init,
     version: version,
@@ -429,6 +442,7 @@
     memoryGrow: function (h, delta) { requireInit(); return num(E.zw_instance_memory_grow(BigInt(h), delta)); },
     memoryBytes: memoryBytes,
     exportMount: exportMount,
+    importMount: importMount,
 
     globalInfo: globalInfo,
     globalGet: globalGet,

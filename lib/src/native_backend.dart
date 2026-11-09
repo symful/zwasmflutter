@@ -28,6 +28,9 @@ final class _ZWImportDesc extends Struct {
 typedef _HostCallbackNative = Int32 Function(
     Pointer<Void>, Uint32, Pointer<Uint64>, Uint32, Pointer<Uint64>, Uint32);
 
+typedef _VfsWriteNative = Int32 Function(Pointer<Void>, Pointer<Uint8>,
+    IntPtr, Uint64, Pointer<Uint8>, IntPtr);
+
 DynamicLibrary _openLibrary() {
   if (Platform.isAndroid || Platform.isLinux) {
     return DynamicLibrary.open('lib$_libName.so');
@@ -54,6 +57,13 @@ final class _HostBinding {
   final NativeCallable<_HostCallbackNative> callable;
 
   _HostBinding(this.id, this.callable);
+}
+
+final class _VfsBinding {
+  final ZwasmVfsWriteCallback callback;
+  final NativeCallable<_VfsWriteNative> callable;
+
+  _VfsBinding(this.callback, this.callable);
 }
 
 /// Holds the native staging buffers for one `instantiate` call. Everything is
@@ -251,6 +261,17 @@ class NativeZwasmBackend implements ZwasmBackend {
             Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
         int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
             int)>('zw_instance_export_mount');
+    _importMount = _lib.lookupFunction<
+        Int32 Function(
+            Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
+            int)>('zw_instance_import_mount');
+    _setVfsCb = _lib.lookupFunction<
+        Void Function(Pointer<Void>, Pointer<Void>,
+            Pointer<NativeFunction<_VfsWriteNative>>),
+        void Function(Pointer<Void>, Pointer<Void>,
+            Pointer<NativeFunction<_VfsWriteNative>>)>(
+        'zw_instance_set_vfs_write_callback');
 
     _globalInfo = _lib.lookupFunction<
         Int32 Function(Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>,
@@ -272,6 +293,7 @@ class NativeZwasmBackend implements ZwasmBackend {
 
   final Map<int, List<ZwasmHostImport>> _hostImports = {};
   final Map<int, _HostBinding> _hostBindings = {};
+  final Map<int, _VfsBinding> _vfsBindings = {};
   int _nextHostId = 1;
   String? _pendingHostError;
   late final int Function() _versionLen;
@@ -334,6 +356,10 @@ class NativeZwasmBackend implements ZwasmBackend {
   late final int Function(Pointer<Void>, int) _memGrow;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
       int) _exportMount;
+  late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
+      int) _importMount;
+  late final void Function(Pointer<Void>, Pointer<Void>,
+      Pointer<NativeFunction<_VfsWriteNative>>) _setVfsCb;
 
   late final int Function(
       Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
@@ -632,6 +658,7 @@ class NativeZwasmBackend implements ZwasmBackend {
       _hostImports.remove(binding.id);
       binding.callable.close();
     }
+    _vfsBindings.remove(instance)?.callable.close();
   }
 
   @override
@@ -750,6 +777,51 @@ class NativeZwasmBackend implements ZwasmBackend {
     } finally {
       _unstage(rp, rb.length);
     }
+  }
+
+  @override
+  void importMount(int instance, String root, Uint8List data) {
+    final rb = _utf8(root);
+    final rp = _stage(rb);
+    final dp = _stage(data);
+    try {
+      final rc = _importMount(_h(instance), rp, rb.length, dp, data.length);
+      if (rc != 0) _fail();
+    } finally {
+      _unstage(rp, rb.length);
+      _unstage(dp, data.length);
+    }
+  }
+
+  @override
+  void setVfsWriteCallback(
+      int instance, ZwasmVfsWriteCallback? callback) {
+    final old = _vfsBindings.remove(instance);
+    old?.callable.close();
+    if (callback == null) {
+      _setVfsCb(_h(instance), nullptr,
+          Pointer<NativeFunction<_VfsWriteNative>>.fromAddress(0));
+      return;
+    }
+    final callable = NativeCallable<_VfsWriteNative>.isolateLocal(
+      (Pointer<Void> ctx, Pointer<Uint8> path, int plen, int offset,
+          Pointer<Uint8> data, int dlen) {
+        final b = _vfsBindings[ctx.address];
+        if (b == null) return 1;
+        try {
+          b.callback(utf8.decode(path.asTypedList(plen)), offset,
+              Uint8List.fromList(data.asTypedList(dlen)));
+          return 0;
+        } catch (e) {
+          _pendingHostError = e.toString();
+          return 1;
+        }
+      },
+      exceptionalReturn: 1,
+    );
+    _vfsBindings[instance] = _VfsBinding(callback, callable);
+    _setVfsCb(_h(instance), Pointer<Void>.fromAddress(instance),
+        callable.nativeFunction);
   }
 
   @override

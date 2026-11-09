@@ -6,6 +6,8 @@
   read-only, `/data` + `/tmp` writable. No host preopens, no `std::Io`;
   native and web.
 * Add `ZwasmInstance.exportMount(root)` for save persistence.
+* Add `ZwasmInstance.importMount(root, blob)` for save restore.
+* Add `ZwasmInstance.setVfsWriteCallback` for write-through host persistence.
 * Add `ZwasmWasiConfig.preopenDir` (native; Windows disabled pending a
   `std.Io` teardown fix).
 * Fix module lifetime: the shim now owns a copy of the compile input because

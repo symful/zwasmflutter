@@ -18,6 +18,10 @@ Future<void> main() async {
     ..addFile('/app/hello.txt', Uint8List.fromList(utf8.encode('hello')));
   final instance =
       module.instantiate(engine: ZwasmEngineChoice.interp, wasi: wasi);
+  final writes = <String>[];
+  instance.setVfsWriteCallback((path, offset, data) {
+    writes.add('$path:$offset:${utf8.decode(data)}');
+  });
   var code = 0;
   try {
     instance.findFunction('_start')!.call([]);
@@ -30,6 +34,10 @@ Future<void> main() async {
     }
   }
   print('vfs cart exit=$code wasiExit=${instance.wasiExitCode}');
+  print('write-through: $writes');
+  if (!writes.contains('/data/out.txt:0:hello')) {
+    throw StateError('write-through callback did not fire');
+  }
   final mount = instance.exportMount('/data');
   final bd = ByteData.sublistView(mount);
   var off = 0;
@@ -48,6 +56,23 @@ Future<void> main() async {
     print('  /data file: $path (${bytes.length})');
     if (path == '/data/out.txt') outText = utf8.decode(bytes);
   }
+  final wasi2 = ZwasmWasiConfig()..addDir('/data', writable: true);
+  final instance2 =
+      module.instantiate(engine: ZwasmEngineChoice.interp, wasi: wasi2);
+  instance2.importMount('/data', mount);
+  final roundTrip = instance2.exportMount('/data');
+  instance2.dispose();
+  wasi2.dispose();
+  if (roundTrip.length != mount.length) {
+    throw StateError('import/export length mismatch');
+  }
+  for (var i = 0; i < mount.length; i++) {
+    if (roundTrip[i] != mount[i]) {
+      throw StateError('import/export byte mismatch at $i');
+    }
+  }
+  print('import/export round-trip OK');
+
   instance.dispose();
   wasi.dispose();
   module.dispose();
