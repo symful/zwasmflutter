@@ -1,0 +1,4 @@
+[submodule "src/zwasm"]
+	path = src/zwasm
+	url = https://github.com/symful/zwasm.git
+	branch = flutter-wasm64

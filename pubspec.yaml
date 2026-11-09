@@ -1,0 +1,29 @@
+name: zwasm
+description: "Cross-platform WebAssembly runtime for Flutter, powered by zwasm."
+version: 0.0.1
+homepage: https://github.com/zwasm/zwasm
+
+environment:
+  sdk: ^3.11.5
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
+
+  assets:
+    - web/zwasm_plugin.wasm
+    - web/zwasm_bridge.js

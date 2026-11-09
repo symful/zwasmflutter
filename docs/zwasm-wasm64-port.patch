@@ -1,0 +1,852 @@
+diff --git a/src/api/config.zig b/src/api/config.zig
+index 40cfc81..812f427 100644
+--- a/src/api/config.zig
++++ b/src/api/config.zig
+@@ -12,6 +12,7 @@
+ //! `wasm_engine_new`).
+ 
+ const std = @import("std");
++const plat = @import("../platform/alloc.zig");
+ 
+ const instance = @import("instance.zig");
+ const Engine = instance.Engine;
+@@ -23,14 +24,14 @@ pub const Config = struct {
+ };
+ 
+ pub export fn wasm_config_new() callconv(.c) ?*Config {
+-    const c = std.heap.c_allocator.create(Config) catch return null;
++    const c = plat.allocator.create(Config) catch return null;
+     c.* = .{};
+     return c;
+ }
+ 
+ pub export fn wasm_config_delete(c: ?*Config) callconv(.c) void {
+     const handle = c orelse return;
+-    std.heap.c_allocator.destroy(handle);
++    plat.allocator.destroy(handle);
+ }
+ 
+ /// `wasm_engine_new_with_config(own wasm_config_t*)` — consumes (takes
+@@ -38,7 +39,7 @@ pub export fn wasm_config_delete(c: ?*Config) callconv(.c) void {
+ /// honours no config knobs, so this is `wasm_engine_new` after adopting the
+ /// config per the `own` transfer contract. Null config is tolerated.
+ pub export fn wasm_engine_new_with_config(c: ?*Config) callconv(.c) ?*Engine {
+-    if (c) |handle| std.heap.c_allocator.destroy(handle);
++    if (c) |handle| plat.allocator.destroy(handle);
+     return instance.wasm_engine_new();
+ }
+ 
+diff --git a/src/api/instance.zig b/src/api/instance.zig
+index 8d2ee17..b4b5252 100644
+--- a/src/api/instance.zig
++++ b/src/api/instance.zig
+@@ -25,6 +25,8 @@
+ 
+ const std = @import("std");
+ 
++const plat = @import("../platform/alloc.zig");
++
+ const runtime = @import("../runtime/runtime.zig");
+ const runtime_instance = @import("../runtime/instance/instance.zig");
+ const runtime_instance_import = @import("../runtime/instance/import.zig");
+@@ -87,7 +89,7 @@ const testing = std.testing;
+ /// `wasm_engine_t` — process-wide top-level handle. Carries the
+ /// allocator the binding will thread into runtimes (and into
+ /// future `wasm_store_t` GC roots). The §9.3 / 3.3 binding uses
+-/// `std.heap.c_allocator` so C hosts get malloc-equivalent
++/// `plat.allocator` so C hosts get malloc-equivalent
+ /// lifetime; a future `zwasm.h` extension will let the host
+ /// inject its own.
+ pub const Engine = runtime.Engine;
+@@ -231,12 +233,12 @@ pub export fn wasm_engine_new() callconv(.c) ?*Engine {
+         var dbg_initialised: bool = false;
+     };
+     if (!tls.dbg_initialised) {
+-        const raw = std.c.getenv("ZWASM_DEBUG");
++        const raw = plat.getenv("ZWASM_DEBUG");
+         const value: ?[]const u8 = if (raw) |p| std.mem.span(p) else null;
+         dbg.initFromEnv(value);
+         tls.dbg_initialised = true;
+     }
+-    const alloc = std.heap.c_allocator;
++    const alloc = plat.allocator;
+     const e = alloc.create(Engine) catch return null;
+     // ADR-0184: the engine owns a `std.Io.Threaded` so the C-ABI
+     // surface (which cannot receive a Zig io token) can serve WASI
+@@ -382,9 +384,9 @@ pub export fn wasm_store_delete(s: ?*Store) callconv(.c) void {
+     for (handle.retired_wasi_hosts.items) |host_opaque| {
+         const host: *wasi_host.Host = @ptrCast(@alignCast(host_opaque));
+         host.deinit();
+-        std.heap.c_allocator.destroy(host);
++        plat.allocator.destroy(host);
+     }
+-    handle.retired_wasi_hosts.deinit(std.heap.c_allocator);
++    handle.retired_wasi_hosts.deinit(plat.allocator);
+     alloc.destroy(handle);
+ }
+ 
+@@ -489,11 +491,11 @@ pub export fn zwasm_store_set_wasi(s: ?*Store, h: ?*wasi_host.Host) callconv(.c)
+             // (ADR-0224). Kept fallible rather than assuming the capacity so a
+             // violated reservation degrades instead of panicking in a library.
+             // EXEMPT-FALLBACK: ADR-0014 — an append OOM accepts the leak over the UAF, mirroring parkInstance.
+-            store.retired_wasi_hosts.append(std.heap.c_allocator, old_opaque) catch {};
++            store.retired_wasi_hosts.append(plat.allocator, old_opaque) catch {};
+         } else {
+             const old: *wasi_host.Host = @ptrCast(@alignCast(old_opaque));
+             old.deinit();
+-            std.heap.c_allocator.destroy(old);
++            plat.allocator.destroy(old);
+         }
+     }
+     store.wasi_host_captured = false;
+@@ -839,7 +841,7 @@ fn buildBindings(
+             // instances stay callable and their exits report nothing.
+             // Reserving at capture puts the allocation failure on the
+             // instantiation, which can and does report it.
+-            try store.retired_wasi_hosts.ensureUnusedCapacity(std.heap.c_allocator, 1);
++            try store.retired_wasi_hosts.ensureUnusedCapacity(plat.allocator, 1);
+             store.wasi_host_captured = true;
+             bindings[idx] = .{ .func = .{
+                 .host_call = .{ .fn_ptr = thunk, .ctx = wasi_host_ptr },
+@@ -1476,7 +1478,7 @@ fn instantiateJit(store: *Store, module: *const Module, builder_state: anytype,
+     // `runStart`, which can still fail the instantiation) — see buildBindings,
+     // including why the retirement slot is reserved at capture.
+     if (store.wasi_host != null) {
+-        store.retired_wasi_hosts.ensureUnusedCapacity(std.heap.c_allocator, 1) catch {
++        store.retired_wasi_hosts.ensureUnusedCapacity(plat.allocator, 1) catch {
+             unregisterJitEh(jit);
+             jit.deinit(alloc);
+             alloc.destroy(jit);
+@@ -2128,7 +2130,7 @@ fn hostFuncThunk(rt: *runtime.Runtime, ctx: *anyopaque) anyerror!void {
+     const np: u32 = @intCast(p.params.len);
+     const nr = p.results.len;
+     if (rt.operand_len < np) return runtime.Trap.StackOverflow;
+-    const ca = std.heap.c_allocator;
++    const ca = plat.allocator;
+     const bufs = try allocHostMarshalBuffers(ca, p.params.len, nr);
+     const args_data = bufs.args;
+     defer ca.free(args_data);
+@@ -2682,7 +2684,7 @@ pub export fn wasm_extern_vec_delete(v: ?*ExternVec) callconv(.c) void {
+         for (dp[0..handle.size]) |opt_ext| {
+             if (opt_ext) |ext| wasm_extern_delete(ext);
+         }
+-        std.heap.c_allocator.free(dp[0..handle.size]);
++        plat.allocator.free(dp[0..handle.size]);
+     }
+     handle.* = .{ .size = 0, .data = null };
+ }
+@@ -2709,7 +2711,7 @@ pub export fn wasm_instance_exports(i: ?*const Instance, out: ?*ExternVec) callc
+     }
+     if (want == 0) return;
+ 
+-    const buf = std.heap.c_allocator.alloc(?*Extern, want) catch return;
++    const buf = plat.allocator.alloc(?*Extern, want) catch return;
+     @memset(buf, null);
+     var populated: usize = 0;
+ 
+@@ -2798,7 +2800,7 @@ pub export fn wasm_instance_exports(i: ?*const Instance, out: ?*ExternVec) callc
+         for (buf[0..populated]) |opt_ext| {
+             if (opt_ext) |ext| wasm_extern_delete(ext);
+         }
+-        std.heap.c_allocator.free(buf);
++        plat.allocator.free(buf);
+         return;
+     }
+ 
+@@ -5326,8 +5328,8 @@ fn testingAllocEngine() !*Engine {
+ 
+ fn deleteTestingAllocEngine(e: *Engine) void {
+     // `wasm_engine_new` made the engine and its `Io.Threaded` with c_allocator.
+-    e.alloc_ptr = std.heap.c_allocator.ptr;
+-    e.alloc_vtable = @ptrCast(std.heap.c_allocator.vtable);
++    e.alloc_ptr = plat.allocator.ptr;
++    e.alloc_vtable = @ptrCast(plat.allocator.vtable);
+     wasm_engine_delete(e);
+ }
+ 
+diff --git a/src/api/module_introspect.zig b/src/api/module_introspect.zig
+index 62c4d0c..77b0536 100644
+--- a/src/api/module_introspect.zig
++++ b/src/api/module_introspect.zig
+@@ -8,6 +8,7 @@
+ //! Zone 3 (`src/api/`). Re-exported via `api/wasm.zig`.
+ 
+ const std = @import("std");
++const plat = @import("../platform/alloc.zig");
+ const testing = std.testing;
+ 
+ const parser = @import("../parse/parser.zig");
+@@ -18,7 +19,7 @@ const vec = @import("vec.zig");
+ const instance = @import("instance.zig");
+ 
+ const Module = instance.Module;
+-const ca = std.heap.c_allocator;
++const ca = plat.allocator;
+ 
+ /// Map an internal `zir.ValType` → a `wasm_valkind_t` byte (wasm.h:
+ /// I32=0..F64=3, EXTERNREF=128, FUNCREF=129). v128 has no base-enum
+diff --git a/src/api/ref_base.zig b/src/api/ref_base.zig
+index c603fbd..d8aa2fc 100644
+--- a/src/api/ref_base.zig
++++ b/src/api/ref_base.zig
+@@ -14,6 +14,7 @@
+ //! Zone 3 (`src/api/`); re-exported via `api/wasm.zig`.
+ 
+ const std = @import("std");
++const plat = @import("../platform/alloc.zig");
+ const testing = std.testing;
+ 
+ const handles = @import("handles.zig");
+@@ -371,7 +372,7 @@ pub export fn wasm_extern_vec_copy(out: ?*vec.ExternVec, src: ?*const vec.Extern
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(?*handles.Extern, s.size) catch {
++    const buf = plat.allocator.alloc(?*handles.Extern, s.size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+diff --git a/src/api/trap_surface.zig b/src/api/trap_surface.zig
+index fc6f823..e54819c 100644
+--- a/src/api/trap_surface.zig
++++ b/src/api/trap_surface.zig
+@@ -18,6 +18,7 @@
+ //! Zone 3 — same as the rest of `src/api/`.
+ 
+ const std = @import("std");
++const plat = @import("../platform/alloc.zig");
+ const wasm_c_api = @import("wasm.zig");
+ const handles = @import("handles.zig"); // for `Ref` (wasm_trap_as_ref view); pointer-only cycle
+ const hooks = @import("../runtime/hooks.zig");
+@@ -387,12 +388,12 @@ pub const FrameVec = extern struct {
+ };
+ 
+ pub export fn wasm_frame_delete(f: ?*Frame) callconv(.c) void {
+-    if (f) |p| std.heap.c_allocator.destroy(p);
++    if (f) |p| plat.allocator.destroy(p);
+ }
+ 
+ pub export fn wasm_frame_copy(f: ?*const Frame) callconv(.c) ?*Frame {
+     const src = f orelse return null;
+-    const nf = std.heap.c_allocator.create(Frame) catch return null;
++    const nf = plat.allocator.create(Frame) catch return null;
+     nf.* = src.*;
+     return nf;
+ }
+@@ -419,7 +420,7 @@ pub export fn wasm_frame_vec_new_uninitialized(out: ?*FrameVec, size: usize) cal
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(?*Frame, size) catch {
++    const buf = plat.allocator.alloc(?*Frame, size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+@@ -432,7 +433,7 @@ pub export fn wasm_frame_vec_new(out: ?*FrameVec, size: usize, src: ?[*]const ?*
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(?*Frame, size) catch {
++    const buf = plat.allocator.alloc(?*Frame, size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+@@ -450,7 +451,7 @@ pub export fn wasm_frame_vec_copy(out: ?*FrameVec, src: ?*const FrameVec) callco
+         return;
+     }
+     // Deep copy — each vec owns its own frames (shallow would double-free).
+-    const buf = std.heap.c_allocator.alloc(?*Frame, s.size) catch {
++    const buf = plat.allocator.alloc(?*Frame, s.size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+@@ -465,13 +466,13 @@ pub export fn wasm_frame_vec_delete(v: ?*FrameVec) callconv(.c) void {
+         for (dp[0..handle.size]) |opt| {
+             if (opt) |fr| wasm_frame_delete(fr);
+         }
+-        std.heap.c_allocator.free(dp[0..handle.size]);
++        plat.allocator.free(dp[0..handle.size]);
+     }
+     handle.* = .{ .size = 0, .data = null };
+ }
+ 
+ fn newFrame(f: trap_trace.Frame) ?*Frame {
+-    const nf = std.heap.c_allocator.create(Frame) catch return null;
++    const nf = plat.allocator.create(Frame) catch return null;
+     nf.* = .{ .func_index = f.func_idx, .func_offset = f.func_offset, .module_offset = f.module_offset };
+     return nf;
+ }
+@@ -491,11 +492,11 @@ pub export fn wasm_trap_trace(t: ?*const Trap, out: ?*FrameVec) callconv(.c) voi
+     o.* = .{ .size = 0, .data = null };
+     const handle = t orelse return;
+     const frames = handle.trace_ptr orelse return;
+-    const buf = std.heap.c_allocator.alloc(?*Frame, handle.trace_len) catch return;
++    const buf = plat.allocator.alloc(?*Frame, handle.trace_len) catch return;
+     for (frames[0..handle.trace_len], buf, 0..) |f, *slot, i| {
+         slot.* = newFrame(f) orelse {
+             for (buf[0..i]) |made| wasm_frame_delete(made);
+-            std.heap.c_allocator.free(buf);
++            plat.allocator.free(buf);
+             return;
+         };
+     }
+diff --git a/src/api/types.zig b/src/api/types.zig
+index 40e7575..150845f 100644
+--- a/src/api/types.zig
++++ b/src/api/types.zig
+@@ -3,7 +3,7 @@
+ //! The `wasm_{valtype,functype,globaltype,tabletype,memorytype}_t` opaque
+ //! type descriptors + their queries + `wasm_valtype_vec_t`. These are pure
+ //! data descriptors (no Store/runtime coupling), so they allocate directly
+-//! via `std.heap.c_allocator` — unlike Trap/Module/Instance which recover
++//! via `plat.allocator` — unlike Trap/Module/Instance which recover
+ //! the allocator from a Store back-pointer (`api/instance.zig`).
+ //!
+ //! Ownership (upstream wasm-c-api, ADR-0004 pin): every `_new` returns an
+@@ -19,9 +19,10 @@
+ //! auto-link into the C-API lib.
+ 
+ const std = @import("std");
++const plat = @import("../platform/alloc.zig");
+ const testing = std.testing;
+ 
+-const ca = std.heap.c_allocator;
++const ca = plat.allocator;
+ 
+ // wasm.h: WASM_I32=0, I64=1, F32=2, F64=3, EXTERNREF=128, FUNCREF=129.
+ // wasm_mutability_t: WASM_CONST=0, WASM_VAR=1.
+diff --git a/src/api/vec.zig b/src/api/vec.zig
+index 8b34b75..2cb8dcd 100644
+--- a/src/api/vec.zig
++++ b/src/api/vec.zig
+@@ -14,7 +14,7 @@
+ //! one-way keeps the cycle out of the carve-out (see ADR-0007 +
+ //! handover note for chunk d). It moves with `instance.zig`.
+ //!
+-//! All vec data is allocated from `std.heap.c_allocator` so a vec
++//! All vec data is allocated from `plat.allocator` so a vec
+ //! can be freed through the matching `_delete` regardless of
+ //! which Engine produced it — C hosts may construct vecs without
+ //! holding an Engine handle (e.g. before `wasm_engine_new`).
+@@ -25,6 +25,7 @@
+ //! pointer-only (no struct-layout cycle).
+ 
+ const std = @import("std");
++const plat = @import("../platform/alloc.zig");
+ const wasm_c_api = @import("wasm.zig");
+ 
+ const testing = std.testing;
+@@ -75,7 +76,7 @@ fn vecNewUninitialized(comptime T: type, comptime VecT: type, out: ?*VecT, size:
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(T, size) catch {
++    const buf = plat.allocator.alloc(T, size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+@@ -88,7 +89,7 @@ fn vecNew(comptime T: type, comptime VecT: type, out: ?*VecT, size: usize, src:
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(T, size) catch {
++    const buf = plat.allocator.alloc(T, size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+@@ -107,7 +108,7 @@ fn vecCopy(comptime T: type, comptime VecT: type, out: ?*VecT, src: ?*const VecT
+ 
+ fn vecDelete(comptime VecT: type, v: ?*VecT) void {
+     const handle = v orelse return;
+-    if (handle.data) |p| std.heap.c_allocator.free(p[0..handle.size]);
++    if (handle.data) |p| plat.allocator.free(p[0..handle.size]);
+     handle.* = .{ .size = 0, .data = null };
+ }
+ 
+@@ -132,7 +133,7 @@ pub export fn wasm_byte_vec_copy(out: ?*ByteVec, src: ?*const ByteVec) callconv(
+ }
+ 
+ /// `wasm_byte_vec_delete(*ByteVec)` — free the data backing of a
+-/// ByteVec. Pinned to `std.heap.c_allocator` (see header above).
++/// ByteVec. Pinned to `plat.allocator` (see header above).
+ pub export fn wasm_byte_vec_delete(v: ?*ByteVec) callconv(.c) void {
+     vecDelete(ByteVec, v);
+ }
+@@ -230,7 +231,7 @@ pub export fn wasm_extern_vec_new_uninitialized(out: ?*ExternVec, size: usize) c
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(?*wasm_c_api.Extern, size) catch {
++    const buf = plat.allocator.alloc(?*wasm_c_api.Extern, size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+@@ -244,7 +245,7 @@ pub export fn wasm_extern_vec_new(out: ?*ExternVec, size: usize, src: ?[*]const
+         o.* = .{ .size = 0, .data = null };
+         return;
+     }
+-    const buf = std.heap.c_allocator.alloc(?*wasm_c_api.Extern, size) catch {
++    const buf = plat.allocator.alloc(?*wasm_c_api.Extern, size) catch {
+         o.* = .{ .size = 0, .data = null };
+         return;
+     };
+diff --git a/src/api/wasi.zig b/src/api/wasi.zig
+index dbd489a..fe006cc 100644
+--- a/src/api/wasi.zig
++++ b/src/api/wasi.zig
+@@ -13,6 +13,7 @@
+ 
+ const std = @import("std");
+ const builtin = @import("builtin");
++const plat = @import("../platform/alloc.zig");
+ const runtime = @import("../runtime/runtime.zig");
+ const wasi_host = @import("../wasi/host.zig");
+ const wasi_fd = @import("../wasi/fd.zig");
+@@ -36,11 +37,11 @@ const testing = std.testing;
+ ///
+ /// Allocator: pinned to the engine's allocator path is not
+ /// possible since this function does not take an Engine. Uses
+-/// `std.heap.c_allocator` so the resulting Host is freeable
++/// `plat.allocator` so the resulting Host is freeable
+ /// either through `_delete` here or through `wasm_store_delete`
+ /// once installed.
+ pub export fn zwasm_wasi_config_new() callconv(.c) ?*wasi_host.Host {
+-    const alloc = std.heap.c_allocator;
++    const alloc = plat.allocator;
+     const h = alloc.create(wasi_host.Host) catch return null;
+     h.* = wasi_host.Host.init(alloc) catch {
+         alloc.destroy(h);
+@@ -56,7 +57,7 @@ pub export fn zwasm_wasi_config_new() callconv(.c) ?*wasi_host.Host {
+ pub export fn zwasm_wasi_config_delete(h: ?*wasi_host.Host) callconv(.c) void {
+     const handle = h orelse return;
+     handle.deinit();
+-    std.heap.c_allocator.destroy(handle);
++    plat.allocator.destroy(handle);
+ }
+ 
+ /// `zwasm_wasi_config_set_args(cfg, argc, argv)` — explicit argv
+@@ -71,7 +72,7 @@ pub export fn zwasm_wasi_config_set_args(
+ ) callconv(.c) void {
+     const handle = h orelse return;
+     if (argv == null) return;
+-    const ca = std.heap.c_allocator;
++    const ca = plat.allocator;
+     const tmp = ca.alloc([]const u8, argc) catch return;
+     defer ca.free(tmp);
+     for (0..argc) |i| tmp[i] = std.mem.span(argv[i]);
+@@ -91,7 +92,7 @@ pub export fn zwasm_wasi_config_set_envs(
+ ) callconv(.c) void {
+     const handle = h orelse return;
+     if (keys == null or vals == null) return;
+-    const ca = std.heap.c_allocator;
++    const ca = plat.allocator;
+     const k = ca.alloc([]const u8, count) catch return;
+     defer ca.free(k);
+     const v = ca.alloc([]const u8, count) catch return;
+@@ -136,11 +137,15 @@ pub export fn zwasm_wasi_config_preopen_dir(
+ /// `std.c.getenv` in `wasm_engine_new`).
+ pub export fn zwasm_wasi_config_inherit_env(h: ?*wasi_host.Host) callconv(.c) bool {
+     const handle = h orelse return false;
+-    const ca = std.heap.c_allocator;
++    return if (comptime plat.is_wasm) false else inheritEnvImpl(handle);
++}
++
++fn inheritEnvImpl(handle: *wasi_host.Host) bool {
++    const ca = plat.allocator;
+     const env: std.process.Environ = if (builtin.os.tag == .windows)
+         .{ .block = .global }
+     else posix_blk: {
+-        const raw = std.c.environ;
++        const raw = plat.environ();
+         var n: usize = 0;
+         while (raw[n] != null) : (n += 1) {}
+         break :posix_blk .{ .block = .{ .slice = raw[0..n :null] } };
+diff --git a/src/engine/codegen/shared/compile.zig b/src/engine/codegen/shared/compile.zig
+index 2ce794a..1391c72 100644
+--- a/src/engine/codegen/shared/compile.zig
++++ b/src/engine/codegen/shared/compile.zig
+@@ -43,14 +43,16 @@ const dbg = @import("../../../support/dbg.zig");
+ const emit = switch (builtin.target.cpu.arch) {
+     .aarch64 => @import("../arm64/emit.zig"),
+     .x86_64 => @import("../x86_64/emit.zig"),
+-    else => @compileError("unsupported host arch — JIT requires aarch64 or x86_64"),
++    // wasm64 hosts build the interpreter only; the JIT pipeline is never
++    // reached, so the module needs the surface but no implementation.
++    else => @import("emit_stub.zig"),
+ };
+ 
+ /// ADR-0077 — per-arch op-internal scratch reservation lookup.
+ const scratch_reservations: ?regalloc.ScratchReservationFn = switch (builtin.target.cpu.arch) {
+     .aarch64 => &@import("../arm64/abi.zig").opScratchReservation,
+     .x86_64 => &@import("../x86_64/abi.zig").opScratchReservation,
+-    else => @compileError("unsupported host arch"),
++    else => null,
+ };
+ 
+ pub const Error = lowerer.Error || liveness.Error || regalloc.Error || emit.Error || hoist.Error || coalesce.Error || Allocator.Error;
+@@ -257,7 +259,7 @@ pub fn compileOne(
+             .gpr = @import("../arm64/abi.zig").allocatable_gprs.len,
+             .fp = @import("../arm64/abi.zig").allocatable_v_regs.len,
+         },
+-        else => @compileError("unsupported host arch"),
++        else => .{ .gpr = 0, .fp = 0 },
+     };
+     var alloc = try regalloc.computeWith(allocator, &func, @max(pools.gpr, pools.fp), scratch_reservations, pools);
+     errdefer regalloc.deinit(allocator, alloc);
+diff --git a/src/engine/codegen/shared/emit_stub.zig b/src/engine/codegen/shared/emit_stub.zig
+new file mode 100644
+index 0000000..d15b57c
+--- /dev/null
++++ b/src/engine/codegen/shared/emit_stub.zig
+@@ -0,0 +1,51 @@
++//! JIT emit surface for hosts without a native code generator (wasm32/wasm64).
++//!
++//! The interpreter engine never calls into the JIT pipeline, but `compile.zig`
++//! is still analyzed on every target, so this module provides the same names
++//! (`Error`, `CallFixup`, `EmitOutput`, `compile`, `deinit`) with no
++//! implementation. Keeping the shape identical is what lets the single
++//! `emit` dispatch stay a pure import switch.
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++const exception_table = @import("exception_table.zig");
++
++pub const Error = error{UnsupportedOnThisTarget};
++
++pub const CallFixup = struct {
++    byte_offset: u32 = 0,
++    target_func_idx: u32 = 0,
++    is_tail: bool = false,
++};
++
++pub const EmitOutput = struct {
++    bytes: []u8 = &.{},
++    n_slots: u16 = 0,
++    call_fixups: []CallFixup = &.{},
++    frame_bytes: u32 = 0,
++    oob_stub_off: u32 = 0,
++    exception_handlers: []const exception_table.HandlerEntry = &.{},
++};
++
++pub fn compile(
++    allocator: Allocator,
++    func: anytype,
++    alloc: anytype,
++    func_sigs: anytype,
++    module_types: anytype,
++    num_imports: anytype,
++    globals_offsets: anytype,
++    globals_valtypes: anytype,
++    memory0_idx_type: anytype,
++    tag_typeidxs: anytype,
++    uses_type_subtyping: anytype,
++    bounds_elided: anytype,
++) Error!EmitOutput {
++    _ = .{ allocator, func, alloc, func_sigs, module_types, num_imports, globals_offsets, globals_valtypes, memory0_idx_type, tag_typeidxs, uses_type_subtyping, bounds_elided };
++    return error.UnsupportedOnThisTarget;
++}
++
++pub fn deinit(allocator: Allocator, out: EmitOutput) void {
++    if (out.bytes.len != 0) allocator.free(out.bytes);
++    if (out.call_fixups.len != 0) allocator.free(out.call_fixups);
++}
+diff --git a/src/engine/codegen/shared/entry.zig b/src/engine/codegen/shared/entry.zig
+index 6e57966..621a2a9 100644
+--- a/src/engine/codegen/shared/entry.zig
++++ b/src/engine/codegen/shared/entry.zig
+@@ -255,14 +255,18 @@ pub const jit_cohort_clobbers: if (builtin.target.cpu.arch == .aarch64 or builti
+ /// `.{rt} ++ args` correctly and still preserves callee-saved registers.
+ fn jitTrampoline(comptime R: type, f: anytype, rt: *JitRuntime, args: anytype) R {
+     const r = @call(.auto, f, .{rt} ++ args);
+-    asm volatile ("" ::: jit_cohort_clobbers);
++    if (comptime builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .x86_64) {
++        asm volatile ("" ::: jit_cohort_clobbers);
++    }
+     return r;
+ }
+ 
+ /// Void sibling of `jitTrampoline` for the arg'd void path.
+ fn jitTrampolineVoid(f: anytype, rt: *JitRuntime, args: anytype) void {
+     @call(.auto, f, .{rt} ++ args);
+-    asm volatile ("" ::: jit_cohort_clobbers);
++    if (comptime builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .x86_64) {
++        asm volatile ("" ::: jit_cohort_clobbers);
++    }
+ }
+ 
+ pub const JitRuntime = jit_abi.JitRuntime;
+diff --git a/src/engine/codegen/shared/entry_buffer_write.zig b/src/engine/codegen/shared/entry_buffer_write.zig
+index a8e5cf0..00aeff8 100644
+--- a/src/engine/codegen/shared/entry_buffer_write.zig
++++ b/src/engine/codegen/shared/entry_buffer_write.zig
+@@ -99,7 +99,9 @@ pub fn invokeBufferWrite(
+ /// preserve the JIT-clobbered callee-saved cohort across the call.
+ fn jitTrampolineBuf(f: BufferWriteFn, rt: *JitRuntime, results: [*]u64, args: [*]const u64) ErrCode {
+     const code = f(rt, results, args);
+-    asm volatile ("" ::: entry.jit_cohort_clobbers);
++    if (comptime builtin.target.cpu.arch == .aarch64 or builtin.target.cpu.arch == .x86_64) {
++        asm volatile ("" ::: entry.jit_cohort_clobbers);
++    }
+     return code;
+ }
+ 
+diff --git a/src/engine/codegen/shared/linker.zig b/src/engine/codegen/shared/linker.zig
+index 1323cf7..60890bb 100644
+--- a/src/engine/codegen/shared/linker.zig
++++ b/src/engine/codegen/shared/linker.zig
+@@ -32,12 +32,13 @@ const code_map = @import("code_map.zig");
+ const emit = switch (builtin_arch.target.cpu.arch) {
+     .aarch64 => @import("../arm64/emit.zig"),
+     .x86_64 => @import("../x86_64/emit.zig"),
+-    else => @compileError("unsupported host arch for linker"),
++    // wasm64 hosts run the interpreter; the linker is never reached.
++    else => @import("emit_stub.zig"),
+ };
+ const inst = switch (builtin_arch.target.cpu.arch) {
+     .aarch64 => @import("../arm64/inst.zig"),
+     .x86_64 => @import("../x86_64/inst.zig"),
+-    else => @compileError("unsupported host arch for linker"),
++    else => struct {},
+ };
+ 
+ pub const Error = error{
+@@ -359,7 +360,7 @@ pub fn link(allocator: Allocator, func_bodies: []const FuncBody, num_imports: u3
+                     }
+                     inst.patchRel32(block.bytes, @intCast(fixup_abs), 5, @intCast(disp_bytes));
+                 },
+-                else => @compileError("unsupported host arch for linker patch loop"),
++                else => {},
+             }
+         }
+     }
+diff --git a/src/engine/codegen/shared/throw_trampoline.zig b/src/engine/codegen/shared/throw_trampoline.zig
+index 4677dfa..f4c6e04 100644
+--- a/src/engine/codegen/shared/throw_trampoline.zig
++++ b/src/engine/codegen/shared/throw_trampoline.zig
+@@ -291,7 +291,19 @@ fn translateTagIdx(from: *const jit_abi.JitRuntime, to: *const jit_abi.JitRuntim
+ ///   - 1 (handler): install `eh_handler_sp` → SP, `eh_handler_fp`
+ ///     → X29/RBP, then BR/JMP to `eh_handler_pc` (the absolute
+ ///     landing-pad address; never returns to the wrapper).
+-pub fn zwasmThrowTrampoline() callconv(.naked) noreturn {
++fn zwasmThrowTrampolineStub() callconv(.naked) noreturn {
++    @trap();
++}
++
++/// wasm builds the interpreter only, so the naked assembly trampoline is not
++/// referenced there; the stub keeps the declaration's shape for `jit_abi`.
++pub const zwasmThrowTrampoline = if (builtin.target.cpu.arch == .aarch64 or
++    builtin.target.cpu.arch == .x86_64)
++    zwasmThrowTrampolineNaked
++else
++    zwasmThrowTrampolineStub;
++
++fn zwasmThrowTrampolineNaked() callconv(.naked) noreturn {
+     switch (builtin.target.cpu.arch) {
+         // ARM64 body. The offsets into JitRuntime are inlined at
+         // comptime via `std.fmt.comptimePrint` so the asm template
+@@ -499,7 +511,9 @@ pub fn zwasmThrowTrampoline() callconv(.naked) noreturn {
+                 : x86_64_clobbers),
+             else => @compileError("unsupported x86_64 OS for EH trampoline"),
+         },
+-        else => @compileError("unsupported host arch for EH trampoline"),
++        // wasm builds the interpreter only; JIT throw sites never exist, so
++        // this stub is unreachable and need not carry assembly.
++        else => unreachable,
+     }
+ }
+ 
+diff --git a/src/engine/codegen/shared/thunk.zig b/src/engine/codegen/shared/thunk.zig
+index 3f72ef4..f42b026 100644
+--- a/src/engine/codegen/shared/thunk.zig
++++ b/src/engine/codegen/shared/thunk.zig
+@@ -32,7 +32,13 @@ const zir = @import("../../../ir/zir.zig");
+ const arch_thunk = switch (builtin.target.cpu.arch) {
+     .aarch64 => @import("../arm64/thunk.zig"),
+     .x86_64 => @import("../x86_64/thunk.zig"),
+-    else => @compileError("ADR-0066 bridge thunk encoder not implemented for this architecture"),
++    // wasm64 hosts run the interpreter only; no bridge thunk is emitted.
++    else => struct {
++        pub const thunk_bytes: usize = 1;
++        pub fn emitThunk(buf: []u8, callee_rt: usize, callee_entry: usize, sig: zir.FuncType) void {
++            _ = .{ buf, callee_rt, callee_entry, sig };
++        }
++    },
+ };
+ 
+ /// Bridge thunk byte count for the current target architecture.
+diff --git a/src/interp/dispatch.zig b/src/interp/dispatch.zig
+index 5bb677e..f8ac7d1 100644
+--- a/src/interp/dispatch.zig
++++ b/src/interp/dispatch.zig
+@@ -12,6 +12,12 @@
+ //! Zone 2 — may import Zone 0 + 1 + sibling `src/runtime/runtime.zig`.
+ 
+ const std = @import("std");
++const builtin = @import("builtin");
++
++/// wasm targets reject function alignment entirely; the 64-byte layout
++/// nudge is a native-host micro-optimization (#541) and is dropped there.
++const run_frame_align: u29 = if (builtin.target.cpu.arch == .wasm32 or
++    builtin.target.cpu.arch == .wasm64) 1 else 64;
+ 
+ pub const zir = @import("../ir/zir.zig");
+ const dispatch_table = @import("../ir/dispatch_table.zig");
+@@ -52,12 +58,12 @@ pub fn step(
+ /// against a 64-byte boundary (#541, Zen 3). `noinline` keeps a change
+ /// to `run` from moving it; `align(64)` keeps a change to code laid
+ /// out before it from moving it.
+-noinline fn runFrame(
++noinline fn runFrameBody(
+     rt: *Runtime,
+     table: *const DispatchTable,
+     f: *runtime.Frame,
+     instrs: []const ZirInstr,
+-) align(64) anyerror!void {
++) anyerror!void {
+     while (f.pc < instrs.len and !f.done) {
+         // ADR-0179 #3a: throttled cooperative-interrupt poll so a tight
+         // `(loop (br 0))` with no calls is still interruptible. Zero cost
+@@ -79,6 +85,29 @@ noinline fn runFrame(
+     }
+ }
+ 
++/// #541 — keep the hot loop on a 64-byte boundary on native hosts. wasm
++/// rejects function alignment outright, so it gets a plain wrapper.
++noinline fn runFrameAligned(
++    rt: *Runtime,
++    table: *const DispatchTable,
++    f: *runtime.Frame,
++    instrs: []const ZirInstr,
++) align(64) anyerror!void {
++    return runFrameBody(rt, table, f, instrs);
++}
++
++noinline fn runFramePlain(
++    rt: *Runtime,
++    table: *const DispatchTable,
++    f: *runtime.Frame,
++    instrs: []const ZirInstr,
++) anyerror!void {
++    return runFrameBody(rt, table, f, instrs);
++}
++
++const runFrame = if (builtin.target.cpu.arch == .wasm32 or
++    builtin.target.cpu.arch == .wasm64) runFramePlain else runFrameAligned;
++
+ /// Walk an instruction sequence linearly. The loop tracks `pc`
+ /// on the **current frame** (`rt.currentFrame().pc`) so control-
+ /// flow handlers (`br` / `br_if` / `br_table` / `return` / `if`
+diff --git a/src/ir/analysis/local_homing.zig b/src/ir/analysis/local_homing.zig
+index 6839af8..1dc4201 100644
+--- a/src/ir/analysis/local_homing.zig
++++ b/src/ir/analysis/local_homing.zig
+@@ -87,13 +87,18 @@ pub const n_home_gpr: u32 = switch (builtin.target.cpu.arch) {
+ /// temporaries: arm64 → 6, x86_64 → 4.
+ pub const max_homed: u32 = @min(max_homed_global, n_home_gpr, n_allocatable_gpr -| temp_reserve);
+ 
++/// Array storage never has a zero length (Zig cannot index an empty array,
++/// and shared liveness code reads `local_idx[r]` under a runtime `count > 0`
++/// guard). wasm builds home nothing, so the slot is simply unused there.
++const homed_storage: u32 = @max(max_homed, 1);
++
+ /// A resolved homing plan for one function. `count` pseudo-vregs are homed; the
+ /// homed local's absolute wasm local index is `local_idx[r]` for rank
+ /// `r in 0..count`. `rank_of[local_idx]` (via `rankOf`) is the inverse map.
+ pub const Plan = struct {
+     count: u32 = 0,
+     /// rank → absolute wasm local index. Only `[0..count)` is meaningful.
+-    local_idx: [max_homed]u32 = undefined,
++    local_idx: [homed_storage]u32 = undefined,
+     /// Absolute wasm local index → rank, or null when that local is NOT homed.
+     /// Sized to the function's total local count at plan time; backed by
+     /// `rank_buf`.
+diff --git a/src/platform/alloc.zig b/src/platform/alloc.zig
+new file mode 100644
+index 0000000..00e3754
+--- /dev/null
++++ b/src/platform/alloc.zig
+@@ -0,0 +1,23 @@
++//! Platform allocator + process-environment access.
++//!
++//! The C-ABI layer was written for native hosts and pins `std.heap.c_allocator`.
++//! wasm64-wasi has no libc at all, so the browser build substitutes Zig's
++//! `wasm_allocator` and answers env queries with "empty". Keeping the switch in
++//! one module lets the native build keep its libc semantics unchanged.
++
++const std = @import("std");
++const builtin = @import("builtin");
++
++pub const is_wasm = builtin.target.cpu.arch == .wasm32 or builtin.target.cpu.arch == .wasm64;
++
++pub const allocator: std.mem.Allocator = if (is_wasm) std.heap.wasm_allocator else std.heap.c_allocator;
++
++var wasm_environ_null: [1]?[*:0]u8 = .{null};
++
++pub fn getenv(name: [*:0]const u8) ?[*:0]u8 {
++    return if (comptime is_wasm) null else std.c.getenv(name);
++}
++
++pub fn environ() [*:null]?[*:0]u8 {
++    return if (comptime is_wasm) @ptrCast(&wasm_environ_null) else std.c.environ;
++}
+diff --git a/src/zwasm.zig b/src/zwasm.zig
+index e509bf9..5dae68b 100644
+--- a/src/zwasm.zig
++++ b/src/zwasm.zig
+@@ -32,6 +32,7 @@
+ //! treats it as Zone 1.
+ 
+ const std = @import("std");
++const builtin = @import("builtin");
+ 
+ // Single source of truth = build.zig.zon `.version`, threaded through
+ // build_options by build.zig (no hand-sync; bump the zon when the user cuts
+@@ -59,6 +60,7 @@ pub const Memory = @import("zwasm/memory.zig").Memory;
+ pub const Global = @import("zwasm/global.zig").Global;
+ pub const Table = @import("zwasm/table.zig").Table;
+ pub const Linker = @import("zwasm/linker.zig").Linker;
++pub const WasiConfig = @import("zwasm/linker.zig").WasiConfig;
+ pub const Caller = @import("zwasm/caller.zig").Caller;
+ 
+ /// Zig-idiomatic tagged-union mirror of `wasm_val_t`.
+@@ -99,21 +101,25 @@ pub const Value = union(enum) {
+ // pre-ADR-0023 `c_api_lib.zig` mechanism.
+ // ============================================================
+ comptime {
+-    _ = @import("api/wasm.zig");
+-    _ = @import("api/wasi.zig");
+-    _ = @import("api/trap_surface.zig");
+-    _ = @import("api/engine_verdict_test.zig");
+-    _ = @import("api/vec.zig");
+-    _ = @import("api/types.zig");
+-    _ = @import("api/instance.zig");
+-    _ = @import("api/zwasm_ext.zig");
+-    _ = @import("api/module_introspect.zig");
+-    _ = @import("api/extern_new.zig");
+-    _ = @import("api/ref_base.zig");
+-    _ = @import("api/config.zig");
+-    _ = @import("api/host_info.zig");
+-    _ = @import("api/module_serialize.zig");
+-    _ = @import("api/cross_module.zig");
++    // The C ABI binding is native-only: it pulls `std.heap.c_allocator`, and
++    // wasm64 has no libc. Browser builds use the Zig facade through the shim.
++    if (builtin.target.cpu.arch != .wasm32 and builtin.target.cpu.arch != .wasm64) {
++        _ = @import("api/wasm.zig");
++        _ = @import("api/wasi.zig");
++        _ = @import("api/trap_surface.zig");
++        _ = @import("api/engine_verdict_test.zig");
++        _ = @import("api/vec.zig");
++        _ = @import("api/types.zig");
++        _ = @import("api/instance.zig");
++        _ = @import("api/zwasm_ext.zig");
++        _ = @import("api/module_introspect.zig");
++        _ = @import("api/extern_new.zig");
++        _ = @import("api/ref_base.zig");
++        _ = @import("api/config.zig");
++        _ = @import("api/host_info.zig");
++        _ = @import("api/module_serialize.zig");
++        _ = @import("api/cross_module.zig");
++    }
+ }
+ 
+ // ============================================================
