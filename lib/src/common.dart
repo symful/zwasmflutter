@@ -214,6 +214,7 @@ abstract class ZwasmBackend {
   int memoryData(int instance);
   int memoryGrow(int instance, int delta);
   Uint8List memoryBytes(int instance);
+  void memoryWrite(int instance, int address, Uint8List data);
   Uint8List exportMount(int instance, String root);
   void importMount(int instance, String root, Uint8List data);
   void setVfsWriteCallback(

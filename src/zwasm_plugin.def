@@ -32,6 +32,7 @@ EXPORTS
   zw_instance_memory_pages
   zw_instance_memory_data
   zw_instance_memory_grow
+  zw_instance_memory_write
   zw_instance_global_info
   zw_instance_global_get
   zw_instance_global_set

@@ -75,6 +75,8 @@ extension type _Bridge(JSObject _) implements JSObject {
   external int memoryPages(int instance);
   external int memoryGrow(int instance, int delta);
   external JSUint8Array memoryBytes(int instance);
+  external int memoryWrite(
+      int instance, int address, JSUint8Array data);
   external JSUint8Array exportMount(int instance, String root);
   external int importMount(
       int instance, String root, JSUint8Array data);
@@ -309,6 +311,12 @@ class WebZwasmBackend implements ZwasmBackend {
 
   @override
   Uint8List memoryBytes(int instance) => _bridge.memoryBytes(instance).toDart;
+
+  @override
+  void memoryWrite(int instance, int address, Uint8List data) {
+    final rc = _bridge.memoryWrite(instance, address, data.toJS);
+    if (rc != 0) _fail();
+  }
 
   @override
   Uint8List exportMount(int instance, String root) =>

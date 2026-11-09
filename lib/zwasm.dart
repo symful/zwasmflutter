@@ -298,6 +298,11 @@ class ZwasmMemory {
   /// on the web it is a copy.
   Uint8List asUint8List() => Zwasm._backend.memoryBytes(_instance._handle);
 
+  /// Copies [data] into guest memory at [address]. Use this on web; writing to
+  /// [asUint8List] only mutates a copy there.
+  void write(int address, Uint8List data) =>
+      Zwasm._backend.memoryWrite(_instance._handle, address, data);
+
   /// Grows by [deltaPages], returning the previous page count, or null when
   /// the runtime refuses the growth.
   int? grow(int deltaPages) {

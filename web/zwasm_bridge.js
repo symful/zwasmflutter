@@ -446,6 +446,15 @@
     return mem8().slice(p, p + size);
   }
 
+  function memoryWrite(instance, address, data) {
+    requireInit();
+    var size = num(E.zw_instance_memory_size(BigInt(instance)));
+    if (address < 0 || address + data.length > size) return 1;
+    var p = num(E.zw_instance_memory_data(BigInt(instance)));
+    mem8().set(data, p + address);
+    return 0;
+  }
+
   function addDir(config, path, writable) {
     requireInit();
     var b = encoder.encode(path);
@@ -565,6 +574,7 @@
     memoryPages: function (h) { requireInit(); return num(E.zw_instance_memory_pages(BigInt(h))); },
     memoryGrow: function (h, delta) { requireInit(); return num(E.zw_instance_memory_grow(BigInt(h), delta)); },
     memoryBytes: memoryBytes,
+    memoryWrite: memoryWrite,
     exportMount: exportMount,
     importMount: importMount,
 

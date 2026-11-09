@@ -256,6 +256,10 @@ class NativeZwasmBackend implements ZwasmBackend {
     _memGrow = _lib.lookupFunction<
         Int64 Function(Pointer<Void>, Uint32),
         int Function(Pointer<Void>, int)>('zw_instance_memory_grow');
+    _memWrite = _lib.lookupFunction<
+        Int32 Function(Pointer<Void>, Uint64, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, int, Pointer<Uint8>, int)>(
+        'zw_instance_memory_write');
     _exportMount = _lib.lookupFunction<
         Uint64 Function(
             Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
@@ -354,6 +358,7 @@ class NativeZwasmBackend implements ZwasmBackend {
   late final int Function(Pointer<Void>) _memPages;
   late final int Function(Pointer<Void>) _memData;
   late final int Function(Pointer<Void>, int) _memGrow;
+  late final int Function(Pointer<Void>, int, Pointer<Uint8>, int) _memWrite;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
       int) _exportMount;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
@@ -756,6 +761,18 @@ class NativeZwasmBackend implements ZwasmBackend {
     final size = _memSize(_h(instance));
     if (ptr == 0 || size == 0) return Uint8List(0);
     return Pointer<Uint8>.fromAddress(ptr).asTypedList(size);
+  }
+
+  @override
+  void memoryWrite(int instance, int address, Uint8List data) {
+    if (data.isEmpty) return;
+    final dp = _stage(data);
+    try {
+      final rc = _memWrite(_h(instance), address, dp, data.length);
+      if (rc != 0) _fail();
+    } finally {
+      _unstage(dp, data.length);
+    }
   }
 
   @override
