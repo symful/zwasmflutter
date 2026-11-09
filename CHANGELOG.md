@@ -12,6 +12,8 @@
 * Add web VFS write-through through a second JS import.
 * Normalize 32-bit host-import arguments (clear the high half).
 * Include the import's module and name in host-call failure messages.
+* Add `ZwasmMemory.read` / `ZwasmMemory.write` for host imports (bridge v7).
+* Bootstrap the `src/zwasm` submodule when building from a pub git dependency.
 * Add `ZwasmWasiConfig.preopenDir` (native; Windows disabled pending a
   `std.Io` teardown fix).
 * Fix module lifetime: the shim now owns a copy of the compile input because

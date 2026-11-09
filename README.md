@@ -22,8 +22,14 @@ not ship a 32-bit wasm64 libc.
 dependencies:
   zwasm:
     git:
-      url: https://github.com/your-org/zwasm-flutter.git
+      url: https://github.com/symful/zwasmflutter.git
+      ref: main
 ```
+
+`src/zwasm` is a submodule. Pub git dependencies do not clone submodules, so
+the CMake configure step fetches `flutter-wasm64` into the plugin cache when
+`src/zwasm/build.zig` is missing. The first native build needs `git` and
+network access.
 
 ## Quick start
 
@@ -70,7 +76,9 @@ interpreter.
   `exportMount(root)`, `importMount(root)`, `setVfsWriteCallback`,
   `dispose()`.
 * `ZwasmFunction` — `parameterTypes`, `resultTypes`, `call(List<ZwasmValue>)`.
-* `ZwasmMemory` — `sizeInBytes`, `pages`, `asUint8List()`, `grow(deltaPages)`.
+* `ZwasmMemory` — `sizeInBytes`, `pages`, `asUint8List()`, `read(ptr, len)`,
+  `write(ptr, bytes)`, `grow(deltaPages)`. Use `read`/`write` for host imports;
+  `asUint8List()` is an alias on native but a copy on web.
 * `ZwasmGlobal` — `kind`, `mutable`, `value` (get/set).
 * `ZwasmHostImport` — `module`, `name`, `params`, `results`, `function`:
   a Dart implementation of one host import.
@@ -188,7 +196,7 @@ bridge **before** `flutter_bootstrap.js` in `web/index.html`:
 
 `Zwasm.initialize()` then loads `assets/packages/zwasm/web/zwasm_plugin.wasm`
 from the package assets. The bridge registers a single frozen global,
-`globalThis.ZwasmBridge` (`apiVersion: 6`, `abi: 'wasm64-wasi-interp'`);
+`globalThis.ZwasmBridge` (`apiVersion: 7`, `abi: 'wasm64-wasi-interp'`);
 `Zwasm.initialize()` verifies the version before use.
 
 Requirements: a browser with **WebAssembly memory64** support (current
