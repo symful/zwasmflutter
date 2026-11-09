@@ -455,6 +455,14 @@
     return 0;
   }
 
+  function memoryRead(instance, address, length) {
+    requireInit();
+    var size = num(E.zw_instance_memory_size(BigInt(instance)));
+    if (address < 0 || length < 0 || address + length > size) return null;
+    var p = num(E.zw_instance_memory_data(BigInt(instance)));
+    return mem8().slice(p + address, p + address + length);
+  }
+
   function addDir(config, path, writable) {
     requireInit();
     var b = encoder.encode(path);
@@ -512,7 +520,7 @@
   globalThis.ZwasmBridge = Object.freeze({
     // Bumped whenever the signatures or the globalThis shape changes. The
     // Dart web backend refuses to run against a different version.
-    apiVersion: 6,
+    apiVersion: 7,
     abi: 'wasm64-wasi-interp',
     init: init,
     version: version,
@@ -575,6 +583,7 @@
     memoryGrow: function (h, delta) { requireInit(); return num(E.zw_instance_memory_grow(BigInt(h), delta)); },
     memoryBytes: memoryBytes,
     memoryWrite: memoryWrite,
+    memoryRead: memoryRead,
     exportMount: exportMount,
     importMount: importMount,
 

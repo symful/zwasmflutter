@@ -303,6 +303,10 @@ class ZwasmMemory {
   void write(int address, Uint8List data) =>
       Zwasm._backend.memoryWrite(_instance._handle, address, data);
 
+  /// Copies [length] bytes from guest memory at [address].
+  Uint8List read(int address, int length) =>
+      Zwasm._backend.memoryRead(_instance._handle, address, length);
+
   /// Grows by [deltaPages], returning the previous page count, or null when
   /// the runtime refuses the growth.
   int? grow(int deltaPages) {

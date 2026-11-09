@@ -77,6 +77,8 @@ extension type _Bridge(JSObject _) implements JSObject {
   external JSUint8Array memoryBytes(int instance);
   external int memoryWrite(
       int instance, int address, JSUint8Array data);
+  external JSUint8Array? memoryRead(
+      int instance, int address, int length);
   external JSUint8Array exportMount(int instance, String root);
   external int importMount(
       int instance, String root, JSUint8Array data);
@@ -96,9 +98,9 @@ class WebZwasmBackend implements ZwasmBackend {
     final bytes =
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     try {
-      if (_bridge.apiVersion != 6) {
+      if (_bridge.apiVersion != 7) {
         throw StateError(
-            'zwasm web bridge API version ${_bridge.apiVersion}, expected 6');
+            'zwasm web bridge API version ${_bridge.apiVersion}, expected 7');
       }
       await _bridge.init(bytes.toJS).toDart;
     } catch (e) {
@@ -316,6 +318,13 @@ class WebZwasmBackend implements ZwasmBackend {
   void memoryWrite(int instance, int address, Uint8List data) {
     final rc = _bridge.memoryWrite(instance, address, data.toJS);
     if (rc != 0) _fail();
+  }
+
+  @override
+  Uint8List memoryRead(int instance, int address, int length) {
+    final raw = _bridge.memoryRead(instance, address, length);
+    if (raw == null) _fail();
+    return raw.toDart;
   }
 
   @override

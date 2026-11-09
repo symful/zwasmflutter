@@ -260,6 +260,10 @@ class NativeZwasmBackend implements ZwasmBackend {
         Int32 Function(Pointer<Void>, Uint64, Pointer<Uint8>, Size),
         int Function(Pointer<Void>, int, Pointer<Uint8>, int)>(
         'zw_instance_memory_write');
+    _memRead = _lib.lookupFunction<
+        Int32 Function(Pointer<Void>, Uint64, Pointer<Uint8>, Size),
+        int Function(Pointer<Void>, int, Pointer<Uint8>, int)>(
+        'zw_instance_memory_read');
     _exportMount = _lib.lookupFunction<
         Uint64 Function(
             Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
@@ -359,6 +363,7 @@ class NativeZwasmBackend implements ZwasmBackend {
   late final int Function(Pointer<Void>) _memData;
   late final int Function(Pointer<Void>, int) _memGrow;
   late final int Function(Pointer<Void>, int, Pointer<Uint8>, int) _memWrite;
+  late final int Function(Pointer<Void>, int, Pointer<Uint8>, int) _memRead;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
       int) _exportMount;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
@@ -772,6 +777,19 @@ class NativeZwasmBackend implements ZwasmBackend {
       if (rc != 0) _fail();
     } finally {
       _unstage(dp, data.length);
+    }
+  }
+
+  @override
+  Uint8List memoryRead(int instance, int address, int length) {
+    if (length <= 0) return Uint8List(0);
+    final out = malloc<Uint8>(length);
+    try {
+      final rc = _memRead(_h(instance), address, out, length);
+      if (rc != 0) _fail();
+      return Uint8List.fromList(out.asTypedList(length));
+    } finally {
+      malloc.free(out);
     }
   }
 
