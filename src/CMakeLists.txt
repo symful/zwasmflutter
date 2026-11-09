@@ -11,6 +11,22 @@ find_program(ZIG_EXECUTABLE zig REQUIRED)
 set(ZWASM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/zwasm")
 set(ZIG_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/zig")
 
+# A pub `git:` dependency clones this repo but not its submodule. Bootstrap the
+# runtime source if it is missing so the plugin builds from a git dependency.
+if(NOT EXISTS "${ZWASM_SRC}/build.zig")
+  find_program(GIT_EXECUTABLE git REQUIRED)
+  message(STATUS "zwasm submodule missing; fetching flutter-wasm64")
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" clone --depth 1
+            --branch flutter-wasm64
+            https://github.com/symful/zwasm.git "${ZWASM_SRC}"
+    RESULT_VARIABLE ZWASM_CLONE_RESULT
+  )
+  if(NOT ZWASM_CLONE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to fetch the zwasm runtime source")
+  endif()
+endif()
+
 if(ANDROID)
   if(ANDROID_ABI STREQUAL "arm64-v8a")
     set(ZIG_TARGET "aarch64-linux-android")
