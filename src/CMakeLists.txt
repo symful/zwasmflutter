@@ -16,6 +16,7 @@ set(ZIG_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/zig")
 if(NOT EXISTS "${ZWASM_SRC}/build.zig")
   find_program(GIT_EXECUTABLE git REQUIRED)
   message(STATUS "zwasm submodule missing; fetching flutter-wasm64")
+  file(REMOVE_RECURSE "${ZWASM_SRC}")
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" clone --depth 1
             --branch flutter-wasm64
