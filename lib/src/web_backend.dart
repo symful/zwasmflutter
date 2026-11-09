@@ -45,6 +45,19 @@ extension type _Bridge(JSObject _) implements JSObject {
 
   external int instanceNew(
       int module, int engine, int fuel, int maxMemoryPages, int wasiConfig);
+  external int instanceNewWithImports(
+      int module,
+      int engine,
+      int fuel,
+      int maxMemoryPages,
+      int wasiConfig,
+      JSArray modules,
+      JSArray names,
+      JSArray params,
+      JSArray results,
+      JSFunction callback);
+  external int instanceSetVfsWriteCallback(
+      int instance, JSFunction? callback);
   external void instanceDelete(int instance);
 
   external JSUint32Array? funcSig(int instance, String name);
@@ -81,9 +94,9 @@ class WebZwasmBackend implements ZwasmBackend {
     final bytes =
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     try {
-      if (_bridge.apiVersion != 5) {
+      if (_bridge.apiVersion != 6) {
         throw StateError(
-            'zwasm web bridge API version ${_bridge.apiVersion}, expected 5');
+            'zwasm web bridge API version ${_bridge.apiVersion}, expected 6');
       }
       await _bridge.init(bytes.toJS).toDart;
     } catch (e) {
@@ -183,12 +196,47 @@ class WebZwasmBackend implements ZwasmBackend {
   @override
   int instanceNew(int module, ZwasmEngineKind engine, int? fuel,
       int? maxMemoryPages, int? wasiConfig, List<ZwasmHostImport> imports) {
-    if (imports.isNotEmpty) {
-      throw UnsupportedError(
-          'Dart host imports are not supported by the zwasm web backend yet');
+    if (imports.isEmpty) {
+      return _bridge.instanceNew(module, engine.index, fuel ?? -1,
+          maxMemoryPages ?? -1, wasiConfig ?? 0);
     }
-    return _bridge.instanceNew(module, engine.index, fuel ?? -1,
-        maxMemoryPages ?? -1, wasiConfig ?? 0);
+    final modules = [for (final i in imports) i.module.toJS].toJS;
+    final names = [for (final i in imports) i.name.toJS].toJS;
+    final params = [
+      for (final i in imports)
+        Uint8List.fromList([for (final k in i.params) k.index]).toJS
+    ].toJS;
+    final results = [
+      for (final i in imports)
+        Uint8List.fromList([for (final k in i.results) k.index]).toJS
+    ].toJS;
+
+    JSAny? dispatch(JSAny? indexAny, JSAny? argsAny) {
+      final index = (indexAny as JSNumber).toDartInt;
+      final args = (argsAny as JSUint32Array).toDart;
+      final imp = imports[index];
+      final values = <ZwasmValue>[
+        for (var i = 0; i < imp.params.length; i++)
+          ZwasmValue.fromHalves(
+              imp.params[i], args[i * 2], args[i * 2 + 1])
+      ];
+      try {
+        final res = imp.function(values);
+        final out = <int>[
+          for (var i = 0; i < imp.results.length; i++) ...[
+            res[i].lo & 0xFFFFFFFF,
+            res[i].hi & 0xFFFFFFFF,
+          ]
+        ];
+        return [for (final v in out) v.toJS].toJS;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return _bridge.instanceNewWithImports(module, engine.index, fuel ?? -1,
+        maxMemoryPages ?? -1, wasiConfig ?? 0, modules, names, params,
+        results, dispatch.toJS);
   }
 
   @override
@@ -275,9 +323,17 @@ class WebZwasmBackend implements ZwasmBackend {
   @override
   void setVfsWriteCallback(
       int instance, ZwasmVfsWriteCallback? callback) {
-    throw UnsupportedError(
-        'VFS write-through callbacks need web host imports, which are not '
-        'implemented yet');
+    if (callback == null) {
+      _bridge.instanceSetVfsWriteCallback(instance, null);
+      return;
+    }
+    final fn = ((JSAny? path, JSAny? offset, JSAny? data) {
+      callback((path as JSString).toDart, (offset as JSNumber).toDartInt,
+          (data as JSUint8Array).toDart);
+      return 0;
+    }).toJS;
+    final rc = _bridge.instanceSetVfsWriteCallback(instance, fn);
+    if (rc != 0) _fail();
   }
 
   @override

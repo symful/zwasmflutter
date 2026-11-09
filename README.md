@@ -111,9 +111,8 @@ final instance = module.instantiate(
 ```
 
 Inspect imports before instantiating with `module.imports`. Host imports are
-implemented for native FFI targets (Windows, Android, Linux); the web backend
-throws `UnsupportedError` because the JS bridge cannot pass a wasm callback
-pointer yet.
+implemented on every target, including web: the bridge dispatches the wasm
+host call into a Dart callback through the JS interop layer.
 
 ### WASI
 
@@ -174,8 +173,8 @@ instance.setVfsWriteCallback((path, offset, bytes) {
 ```
 
 The callback fires on every guest file write (including zero-length flushes)
-and runs synchronously on the wasm thread. Web throws for now because the
-callback needs web host imports.
+and runs synchronously on the wasm thread. Web uses the same Dart callback via
+the JS bridge; the wasm plugin calls a JS import instead of a native pointer.
 
 ## Web setup
 
@@ -189,7 +188,7 @@ bridge **before** `flutter_bootstrap.js` in `web/index.html`:
 
 `Zwasm.initialize()` then loads `assets/packages/zwasm/web/zwasm_plugin.wasm`
 from the package assets. The bridge registers a single frozen global,
-`globalThis.ZwasmBridge` (`apiVersion: 1`, `abi: 'wasm64-wasi-interp'`);
+`globalThis.ZwasmBridge` (`apiVersion: 6`, `abi: 'wasm64-wasi-interp'`);
 `Zwasm.initialize()` verifies the version before use.
 
 Requirements: a browser with **WebAssembly memory64** support (current

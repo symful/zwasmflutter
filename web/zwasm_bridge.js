@@ -132,10 +132,125 @@
     path_filestat_get: function () { return 8; }
   };
 
+  // ── host imports ───────────────────────────────────────────────────────
+  var hostCallbacks = {};
+  var nextHostCtx = 1;
+  var instanceHostCtx = {};
+  var instanceVfsCtx = {};
+
+  function hostCall(ctx, index, argsPtr, nArgs, resultsPtr, nResults) {
+    var cb = hostCallbacks[Number(ctx)];
+    if (!cb) return 1;
+    var n = Number(nArgs);
+    var rn = Number(nResults);
+    var args = new Uint32Array(E.memory.buffer, Number(argsPtr), n * 2);
+    var out;
+    try {
+      out = cb(index, args);
+    } catch (e) {
+      return 1;
+    }
+    if (!out || out.length < rn * 2) return 1;
+    for (var i = 0; i < rn; i++) {
+      var lo = BigInt(out[i * 2] >>> 0);
+      var hi = BigInt(out[i * 2 + 1] >>> 0);
+      setU64(Number(resultsPtr) + i * 8, (hi << 32n) | lo);
+    }
+    return 0;
+  }
+
+  // ── VFS write-through ──────────────────────────────────────────────────
+  var vfsCallbacks = {};
+  var nextVfsCtx = 1;
+
+  function vfsWrite(ctx, pathPtr, pathLen, offset, dataPtr, dataLen) {
+    var cb = vfsCallbacks[Number(ctx)];
+    if (!cb) return 1;
+    var path = decoder.decode(
+      new Uint8Array(E.memory.buffer, Number(pathPtr), Number(pathLen)));
+    var data = new Uint8Array(
+      E.memory.buffer, Number(dataPtr), Number(dataLen)).slice();
+    try {
+      cb(path, Number(offset), data);
+      return 0;
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  function instanceSetVfsWriteCallback(instance, cb) {
+    requireInit();
+    if (!cb) {
+      E.zw_instance_set_vfs_write_callback(BigInt(instance), 0n, 0n);
+      var old = instanceVfsCtx[instance];
+      if (old) delete vfsCallbacks[old];
+      delete instanceVfsCtx[instance];
+      return 0;
+    }
+    var ctx = nextVfsCtx++;
+    vfsCallbacks[ctx] = cb;
+    instanceVfsCtx[instance] = ctx;
+    E.zw_instance_set_vfs_write_callback(
+      BigInt(instance), BigInt(ctx), 1n);
+    return 0;
+  }
+
+  function instanceNewWithImports(module, engine, fuel, maxPages, wasiConfig,
+                                  modules, names, params, results, cb) {
+    requireInit();
+    var n = modules.length;
+    if (n === 0) {
+      return num(E.zw_instance_new(BigInt(module), engine, BigInt(fuel),
+        BigInt(maxPages), wasiConfig ? BigInt(wasiConfig) : 0n));
+    }
+    var descs = alloc(n * 64);
+    var blocks = [];
+    function stage(bytes) {
+      var p = allocBytes(bytes);
+      blocks.push([p, bytes.length || 1]);
+      return p;
+    }
+    for (var i = 0; i < n; i++) {
+      var mb = encoder.encode(modules[i]);
+      var nb = encoder.encode(names[i]);
+      var mp = stage(mb);
+      var np = stage(nb);
+      var pp = stage(params[i]);
+      var rp = stage(results[i]);
+      var d = descs + i * 64;
+      setU64(d, BigInt(mp));
+      setU64(d + 8, BigInt(mb.length));
+      setU64(d + 16, BigInt(np));
+      setU64(d + 24, BigInt(nb.length));
+      setU64(d + 32, BigInt(pp));
+      setU64(d + 40, BigInt(params[i].length));
+      setU64(d + 48, BigInt(rp));
+      setU64(d + 56, BigInt(results[i].length));
+    }
+    var ctxId = nextHostCtx++;
+    hostCallbacks[ctxId] = cb;
+    var h = num(E.zw_instance_new_with_imports(
+      BigInt(module), engine, BigInt(fuel), BigInt(maxPages),
+      wasiConfig ? BigInt(wasiConfig) : 0n,
+      BigInt(descs), n, BigInt(ctxId), 0n));
+    if (!h) {
+      delete hostCallbacks[ctxId];
+    } else {
+      instanceHostCtx[h] = ctxId;
+    }
+    for (var b = 0; b < blocks.length; b++) free(blocks[b][0], blocks[b][1]);
+    free(descs, n * 64);
+    return h;
+  }
+
   async function init(bytes) {
     if (E) return;
     var result = await WebAssembly.instantiate(bytes, {
-      wasi_snapshot_preview1: wasi
+      wasi_snapshot_preview1: wasi,
+      env: {
+        zwJsHostCall: hostCall,
+        zwJsVfsWrite: vfsWrite
+      }
     });
     E = result.instance.exports;
   }
@@ -388,7 +503,7 @@
   globalThis.ZwasmBridge = Object.freeze({
     // Bumped whenever the signatures or the globalThis shape changes. The
     // Dart web backend refuses to run against a different version.
-    apiVersion: 5,
+    apiVersion: 6,
     abi: 'wasm64-wasi-interp',
     init: init,
     version: version,
@@ -425,7 +540,16 @@
       return num(E.zw_instance_new(BigInt(module), engine, BigInt(fuel),
         BigInt(maxPages), wasiConfig ? BigInt(wasiConfig) : 0n));
     },
-    instanceDelete: function (h) { requireInit(); E.zw_instance_delete(BigInt(h)); },
+    instanceNewWithImports: instanceNewWithImports,
+    instanceSetVfsWriteCallback: instanceSetVfsWriteCallback,
+    instanceDelete: function (h) {
+      requireInit();
+      var hc = instanceHostCtx[h];
+      if (hc) { delete hostCallbacks[hc]; delete instanceHostCtx[h]; }
+      var vc = instanceVfsCtx[h];
+      if (vc) { delete vfsCallbacks[vc]; delete instanceVfsCtx[h]; }
+      E.zw_instance_delete(BigInt(h));
+    },
 
     funcSig: funcSig,
     invoke: invoke,
