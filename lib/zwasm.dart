@@ -139,6 +139,7 @@ class ZwasmModule {
 class ZwasmInstance {
   final int _handle;
   final List<ZwasmExport> _exports;
+  final Map<String, ZwasmFunction?> _functionCache = {};
   bool _disposed = false;
 
   ZwasmInstance._(this._handle, this._exports);
@@ -156,8 +157,11 @@ class ZwasmInstance {
 
   /// The exported function [name], or null if it is not a function export.
   ZwasmFunction? findFunction(String name) {
+    if (_functionCache.containsKey(name)) return _functionCache[name];
     final sig = signatureOf(name);
-    return sig == null ? null : ZwasmFunction._(this, name, sig);
+    final fn = sig == null ? null : ZwasmFunction._(this, name, sig);
+    _functionCache[name] = fn;
+    return fn;
   }
 
   /// First exported function, if any.
@@ -238,6 +242,7 @@ class ZwasmInstance {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _functionCache.clear();
     Zwasm._backend.instanceDelete(_handle);
   }
 

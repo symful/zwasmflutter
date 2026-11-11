@@ -37,20 +37,25 @@ class ZwasmValue {
   final int lo;
   final int hi;
 
+  static final ByteData _scratch = ByteData(8);
+
   const ZwasmValue._(this.kind, this.lo, this.hi);
 
   factory ZwasmValue.i32(int value) =>
       ZwasmValue._(ZwasmValueKind.i32, value & 0xFFFFFFFF, 0);
   factory ZwasmValue.i64(int value) => ZwasmValue._(
       ZwasmValueKind.i64, value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF);
-  factory ZwasmValue.f32(double value) => ZwasmValue._(
-      ZwasmValueKind.f32,
-      (ByteData(4)..setFloat32(0, value)).getUint32(0, Endian.little),
-      0);
+  factory ZwasmValue.f32(double value) {
+    _scratch.setFloat32(0, value, Endian.little);
+    return ZwasmValue._(
+        ZwasmValueKind.f32, _scratch.getUint32(0, Endian.little), 0);
+  }
+
   factory ZwasmValue.f64(double value) {
-    final bd = ByteData(8)..setFloat64(0, value);
+    _scratch.setFloat64(0, value, Endian.little);
     return ZwasmValue._(ZwasmValueKind.f64,
-        bd.getUint32(0, Endian.little), bd.getUint32(4, Endian.little));
+        _scratch.getUint32(0, Endian.little),
+        _scratch.getUint32(4, Endian.little));
   }
 
   factory ZwasmValue.funcref(int? ref) => ZwasmValue._(
@@ -71,17 +76,19 @@ class ZwasmValue {
         _ => bits,
       };
 
-  double get asDouble => switch (kind) {
-        ZwasmValueKind.f32 =>
-          (ByteData(4)..setUint32(0, lo & 0xFFFFFFFF, Endian.little))
-              .getFloat32(0, Endian.little),
-        ZwasmValueKind.f64 =>
-          (ByteData(8)
-                ..setUint32(0, lo & 0xFFFFFFFF, Endian.little)
-                ..setUint32(4, hi & 0xFFFFFFFF, Endian.little))
-              .getFloat64(0, Endian.little),
-        _ => asInt.toDouble(),
-      };
+  double get asDouble {
+    switch (kind) {
+      case ZwasmValueKind.f32:
+        _scratch.setUint32(0, lo & 0xFFFFFFFF, Endian.little);
+        return _scratch.getFloat32(0, Endian.little);
+      case ZwasmValueKind.f64:
+        _scratch.setUint32(0, lo & 0xFFFFFFFF, Endian.little);
+        _scratch.setUint32(4, hi & 0xFFFFFFFF, Endian.little);
+        return _scratch.getFloat64(0, Endian.little);
+      default:
+        return asInt.toDouble();
+    }
+  }
 
   @override
   String toString() => switch (kind) {
