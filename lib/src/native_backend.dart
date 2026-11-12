@@ -274,6 +274,10 @@ class NativeZwasmBackend implements ZwasmBackend {
             Pointer<Void>, Pointer<Uint8>, Size, Pointer<Uint8>, Size),
         int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
             int)>('zw_instance_import_mount');
+    _setMountQuota = _lib.lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Uint8>, Size, Uint64),
+        int Function(Pointer<Void>, Pointer<Uint8>, int, int)>(
+        'zw_instance_set_mount_quota');
     _setVfsCb = _lib.lookupFunction<
         Void Function(Pointer<Void>, Pointer<Void>,
             Pointer<NativeFunction<_VfsWriteNative>>),
@@ -368,6 +372,8 @@ class NativeZwasmBackend implements ZwasmBackend {
       int) _exportMount;
   late final int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>,
       int) _importMount;
+  late final int Function(Pointer<Void>, Pointer<Uint8>, int, int)
+      _setMountQuota;
   late final void Function(Pointer<Void>, Pointer<Void>,
       Pointer<NativeFunction<_VfsWriteNative>>) _setVfsCb;
 
@@ -825,6 +831,18 @@ class NativeZwasmBackend implements ZwasmBackend {
     } finally {
       _unstage(rp, rb.length);
       _unstage(dp, data.length);
+    }
+  }
+
+  @override
+  void setMountQuota(int instance, String root, int bytes) {
+    final rb = _utf8(root);
+    final rp = _stage(rb);
+    try {
+      final rc = _setMountQuota(_h(instance), rp, rb.length, bytes);
+      if (rc != 0) _fail();
+    } finally {
+      _unstage(rp, rb.length);
     }
   }
 

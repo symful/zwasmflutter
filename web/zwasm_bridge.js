@@ -504,6 +504,16 @@
     return out;
   }
 
+  function setMountQuota(instance, root, bytes) {
+    requireInit();
+    var rb = encoder.encode(root);
+    var rp = allocBytes(rb);
+    var rc = num(E.zw_instance_set_mount_quota(
+      BigInt(instance), BigInt(rp), BigInt(rb.length), BigInt(bytes)));
+    free(rp, rb.length || 1);
+    return rc;
+  }
+
   function importMount(instance, root, data) {
     requireInit();
     var rb = encoder.encode(root);
@@ -520,7 +530,7 @@
   globalThis.ZwasmBridge = Object.freeze({
     // Bumped whenever the signatures or the globalThis shape changes. The
     // Dart web backend refuses to run against a different version.
-    apiVersion: 7,
+    apiVersion: 1,
     abi: 'wasm64-wasi-interp',
     init: init,
     version: version,
@@ -586,6 +596,7 @@
     memoryRead: memoryRead,
     exportMount: exportMount,
     importMount: importMount,
+    setMountQuota: setMountQuota,
 
     globalInfo: globalInfo,
     globalGet: globalGet,

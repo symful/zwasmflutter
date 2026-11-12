@@ -122,7 +122,7 @@ The web bridge is now a **single frozen, versioned global**:
 
 ```js
 globalThis.ZwasmBridge = Object.freeze({
-  apiVersion: 7,
+  apiVersion: 1,
   abi: 'wasm64-wasi-interp',
   init(bytes), version(), engineNew(), ...
 });

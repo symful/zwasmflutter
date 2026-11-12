@@ -234,6 +234,10 @@ class ZwasmInstance {
   void importMount(String root, Uint8List data) =>
       Zwasm._backend.importMount(_handle, root, data);
 
+  /// Bounds the total file payload under [root] before writes allocate.
+  void setMountQuota(String root, int bytes) =>
+      Zwasm._backend.setMountQuota(_handle, root, bytes);
+
   /// Installs a write-through callback for `/data` file writes. The callback
   /// runs synchronously on the wasm thread; return normally to accept.
   void setVfsWriteCallback(ZwasmVfsWriteCallback? callback) =>

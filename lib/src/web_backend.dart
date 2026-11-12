@@ -82,6 +82,7 @@ extension type _Bridge(JSObject _) implements JSObject {
   external JSUint8Array exportMount(int instance, String root);
   external int importMount(
       int instance, String root, JSUint8Array data);
+  external int setMountQuota(int instance, String root, int bytes);
 
   external JSUint8Array? globalInfo(int instance, String name);
   external JSUint32Array globalGet(int instance, String name);
@@ -98,9 +99,9 @@ class WebZwasmBackend implements ZwasmBackend {
     final bytes =
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     try {
-      if (_bridge.apiVersion != 7) {
+      if (_bridge.apiVersion != 1) {
         throw StateError(
-            'zwasm web bridge API version ${_bridge.apiVersion}, expected 7');
+            'zwasm web bridge API version ${_bridge.apiVersion}, expected 1');
       }
       await _bridge.init(bytes.toJS).toDart;
     } catch (e) {
@@ -334,6 +335,12 @@ class WebZwasmBackend implements ZwasmBackend {
   @override
   void importMount(int instance, String root, Uint8List data) {
     final rc = _bridge.importMount(instance, root, data.toJS);
+    if (rc != 0) _fail();
+  }
+
+  @override
+  void setMountQuota(int instance, String root, int bytes) {
+    final rc = _bridge.setMountQuota(instance, root, bytes);
     if (rc != 0) _fail();
   }
 

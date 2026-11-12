@@ -39,6 +39,7 @@ EXPORTS
   zw_instance_global_set
   zw_instance_export_mount
   zw_instance_import_mount
+  zw_instance_set_mount_quota
   zw_instance_set_vfs_write_callback
   zw_wasi_config_new
   zw_wasi_config_delete

@@ -5,6 +5,7 @@
 * Add an in-memory WASI VFS (`ZwasmWasiConfig.addFile/addDir`): `/app`
   read-only, `/data` + `/tmp` writable. No host preopens, no `std::Io`;
   native and web.
+* Add `ZwasmInstance.setMountQuota(root, bytes)` so VFS writes fail with `ENOSPC` before growing past the limit.
 * Add `ZwasmInstance.exportMount(root)` for save persistence.
 * Add `ZwasmInstance.importMount(root, blob)` for save restore.
 * Add `ZwasmInstance.setVfsWriteCallback` for write-through host persistence.

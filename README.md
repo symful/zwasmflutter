@@ -172,6 +172,9 @@ involved and no `std.Io`; the same code works on native and web.
 The host can persist that blob per profile/cart and restore it later with
 `importMount(root, blob)`.
 
+`setMountQuota(root, bytes)` bounds the total file payload under a mount.
+Writes that would exceed it fail with `ENOSPC` before allocating.
+
 Write-through:
 
 ```dart
@@ -196,7 +199,7 @@ bridge **before** `flutter_bootstrap.js` in `web/index.html`:
 
 `Zwasm.initialize()` then loads `assets/packages/zwasm/web/zwasm_plugin.wasm`
 from the package assets. The bridge registers a single frozen global,
-`globalThis.ZwasmBridge` (`apiVersion: 7`, `abi: 'wasm64-wasi-interp'`);
+`globalThis.ZwasmBridge` (`apiVersion: 1`, `abi: 'wasm64-wasi-interp'`);
 `Zwasm.initialize()` verifies the version before use.
 
 Requirements: a browser with **WebAssembly memory64** support (current
